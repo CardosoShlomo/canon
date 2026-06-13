@@ -7,9 +7,12 @@
 /// stay typed over one screen family.
 library;
 
+import 'package:meta/meta.dart';
+
 /// One placement of a screen in the grammar tree. A screen may own several
 /// placements; the first-built one is canonical.
-class GrammarNode<S extends ScreenNode<Object?, S>> {
+@internal
+final class GrammarNode<S extends ScreenNode<Object?, S>> {
   GrammarNode(this.screen, {this.again = false, this.keep = false});
 
   final S screen;
@@ -84,7 +87,8 @@ mixin ScreenNode<I, S extends ScreenNode<Object?, S>> on Enum {
 }
 
 /// The validated grammar: canonical placements, kinds, and the legality oracle.
-class NavSpec<S extends ScreenNode<Object?, S>> {
+@internal
+final class NavSpec<S extends ScreenNode<Object?, S>> {
   NavSpec(Set<S> rootScreens) {
     final stash = _stashOf(S);
     try {
@@ -170,7 +174,7 @@ class NavSpec<S extends ScreenNode<Object?, S>> {
 }
 
 /// One page on the runtime stack, as the grammar sees it.
-class StackEntry<S extends ScreenNode<Object?, S>> {
+final class StackEntry<S extends ScreenNode<Object?, S>> {
   const StackEntry(this.node, this.id);
 
   final GrammarNode<S> node;
@@ -182,7 +186,7 @@ class StackEntry<S extends ScreenNode<Object?, S>> {
 /// One entry of a live navigation stack — a screen and its id. [T] is the
 /// screen representation: the raw spec enum internally, or the public
 /// `Screen<Object?>` wrapper for the consumer-facing stack.
-class NavEntry<T> {
+final class NavEntry<T> {
   const NavEntry(this.screen, this.id);
 
   final T screen;
@@ -193,7 +197,7 @@ class NavEntry<T> {
 /// derived views. The one stack type — the engine fills it with raw screens
 /// for `onImpossiblePop`, the generated `Screen.stack` fills it with wrappers.
 /// Also the per-scope building block restoration serializes.
-class NavStack<T> {
+final class NavStack<T> {
   const NavStack(this.entries);
 
   final List<NavEntry<T>> entries;
@@ -223,7 +227,8 @@ class NavStack<T> {
 }
 
 /// A resolved navigation step: pop [popCount] pages, then push [pushes].
-class NavResolution<S extends ScreenNode<Object?, S>> {
+@internal
+final class NavResolution<S extends ScreenNode<Object?, S>> {
   const NavResolution({this.popCount = 0, this.pushes = const []});
 
   final int popCount;
@@ -236,6 +241,7 @@ bool _matches<S extends ScreenNode<Object?, S>>(
 
 /// The forward verb's ladder: collapse > edge > canonical. Total — canonical
 /// always resolves.
+@internal
 NavResolution<S> resolveGo<S extends ScreenNode<Object?, S>>(
   NavSpec<S> spec,
   List<StackEntry<S>> stack,

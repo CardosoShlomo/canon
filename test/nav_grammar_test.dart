@@ -1,4 +1,4 @@
-import 'package:canon/canon.dart';
+import 'package:canon/src/screen_node.dart';
 import 'package:test/test.dart';
 
 // A miniature social-app tree: tabs, a profile cycle, and a leaf settings branch.

@@ -6,7 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'screen_node.dart';
 
 /// The page's grammar identity and transition policy inputs.
-class PageCtx<S extends ScreenNode<Object?, S>> {
+final class PageCtx<S extends ScreenNode<Object?, S>> {
   const PageCtx(this.entry, {this.animate = true, this.from});
 
   final StackEntry<S> entry;
@@ -17,7 +17,7 @@ class PageCtx<S extends ScreenNode<Object?, S>> {
 }
 
 /// Scopes a page's screen and id to its subtree.
-class ScreenScope<S extends ScreenNode<Object?, S>> extends InheritedWidget {
+final class ScreenScope<S extends ScreenNode<Object?, S>> extends InheritedWidget {
   const ScreenScope({super.key, required this.entry, required super.child});
 
   final StackEntry<S> entry;
@@ -34,7 +34,8 @@ class ScreenScope<S extends ScreenNode<Object?, S>> extends InheritedWidget {
 
 /// Chain handle: hops queued in one synchronous expression commit together on
 /// a microtask — one diff, one animation.
-class Nav<S extends ScreenNode<Object?, S>> {
+@internal
+final class Nav<S extends ScreenNode<Object?, S>> {
   Nav._(this._graph);
 
   final NavGraph<S> _graph;
@@ -71,7 +72,7 @@ class _Sim<S extends ScreenNode<Object?, S>> {
   List<StackEntry<S>> get stack => stacks[active]!;
 }
 
-class NavGraph<S extends ScreenNode<Object?, S>> {
+final class NavGraph<S extends ScreenNode<Object?, S>> {
   NavGraph(
     Set<S> rootScreens, {
     required this.pageOf,
@@ -269,7 +270,7 @@ class NavGraph<S extends ScreenNode<Object?, S>> {
   }
 }
 
-class NavDelegate<S extends ScreenNode<Object?, S>> extends RouterDelegate<Object>
+final class NavDelegate<S extends ScreenNode<Object?, S>> extends RouterDelegate<Object>
     with ChangeNotifier, PopNavigatorRouterDelegateMixin<Object> {
   NavDelegate._(this._graph);
 
