@@ -13,27 +13,32 @@ import 'package:meta/meta.dart';
 /// placements; the first-built one is canonical.
 @internal
 final class GrammarNode<S extends ScreenNode<Object?, S>> {
-  GrammarNode(this.screen, {this.again = false, this.keep = false});
+  GrammarNode(this.screen, {this.again = false, this.keep = false, this.collapse = true});
 
   final S screen;
   final bool again;
   /// Preserved scope root: leaving its stack parks it instead of popping.
   final bool keep;
+  /// `cycled` back-edge folds a completed duplicate cycle; `stacked` (false)
+  /// pushes a fresh instance instead. Only meaningful on back-edges.
+  final bool collapse;
   final List<GrammarNode<S>> children = [];
   GrammarNode<S>? parent;
 
   /// The node whose children answer "what may follow here" — self, or the
-  /// nearest same-screen ancestor for `again` back-edges.
+  /// nearest same-screen ancestor for `cycled`/`stacked` back-edges.
   GrammarNode<S> get resolved {
     if (!again) return this;
     for (var n = parent; n != null; n = n.parent) {
       if (n.screen == screen && !n.again) return n;
     }
-    throw StateError('"${screen.name}.again" has no same-screen ancestor');
+    throw StateError(
+        '"${screen.name}.${collapse ? 'cycled' : 'stacked'}" has no same-screen ancestor');
   }
 
   @override
-  String toString() => again ? '${screen.name}.again' : screen.name;
+  String toString() =>
+      again ? '${screen.name}.${collapse ? 'cycled' : 'stacked'}' : screen.name;
 }
 
 // Nodes created by call/again awaiting their parent. Set literals evaluate
@@ -66,10 +71,19 @@ mixin ScreenNode<I, S extends ScreenNode<Object?, S>> on Enum {
     return _self;
   }
 
-  /// Back-edge: this screen may appear again here, looping to its nearest
-  /// same-screen ancestor node.
-  S get again {
+  /// Back-edge that folds a completed duplicate cycle: revisiting the same
+  /// (screen, id) block already on the stack pops back to it instead of growing.
+  /// Loops to the nearest same-screen ancestor node.
+  S get cycled {
     _stashOf(S).add(GrammarNode<S>(_self, again: true));
+    return _self;
+  }
+
+  /// Back-edge that stacks a fresh instance on every revisit, preserving the
+  /// intermediate stack (the only guard is the universal no-op when the target
+  /// equals the current top). Loops to the nearest same-screen ancestor node.
+  S get stacked {
+    _stashOf(S).add(GrammarNode<S>(_self, again: true, collapse: false));
     return _self;
   }
 
@@ -171,6 +185,30 @@ final class NavSpec<S extends ScreenNode<Object?, S>> {
     }
     return null;
   }
+
+  /// Whether the edge from [top] to [target] folds completed cycles (`cycled`)
+  /// or stacks fresh instances (`stacked`). Reads the back-edge child's own flag,
+  /// not its resolved ancestor (which is always a canonical, folding node).
+  bool edgeCollapses(GrammarNode<S> top, S target) {
+    for (final child in top.resolved.children) {
+      if (child.screen == target) return child.collapse;
+    }
+    return true;
+  }
+
+  /// Order-independent canonical encoding of the tree's shape (names, nesting,
+  /// keep/again flags). The generator emits the same encoding from source; a
+  /// mismatch means the tree was re-parented without regenerating. Sibling order
+  /// is normalized out, so cosmetic reorders don't trip it.
+  String get structureSignature {
+    String ser(GrammarNode<S> n) {
+      final kids = [for (final c in n.children) ser(c)]..sort();
+      final flags = '${n.keep ? 'K' : ''}${n.again ? 'A' : ''}';
+      return '${n.screen.name}$flags(${kids.join(',')})';
+    }
+
+    return ([for (final r in roots) ser(r)]..sort()).join(';');
+  }
 }
 
 /// One page on the runtime stack, as the grammar sees it.
@@ -251,8 +289,12 @@ NavResolution<S> resolveGo<S extends ScreenNode<Object?, S>>(
 }) {
   // Repeat-collapse: pushing would complete an immediately repeated block of
   // length p — pop to the block's previous occurrence instead of duplicating.
+  // p == 1 (an exact duplicate of the current top) is a universal no-op guard;
+  // the p >= 2 cycle fold is suppressed when the edge is a `stacked` back-edge.
   final n = stack.length;
+  final fold = stack.isEmpty || spec.edgeCollapses(stack.last.node, target);
   for (var p = 1; 2 * p <= n + 1; p++) {
+    if (p > 1 && !fold) break;
     if (!_matches(stack[n - p], target, id)) continue;
     var periodic = true;
     for (var i = 0; i < p - 1; i++) {

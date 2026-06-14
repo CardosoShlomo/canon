@@ -102,6 +102,10 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
 
   S get current => _activeScope.slots.last.entry.screen;
 
+  /// Canonical encoding of the live tree's shape — the generator emits the same
+  /// string from source, so a mismatch flags stale codegen.
+  String get structureSignature => spec.structureSignature;
+
   List<StackEntry<S>> get stack =>
       List.unmodifiable([for (final s in _activeScope.slots) s.entry]);
 

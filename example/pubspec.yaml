@@ -7,11 +7,11 @@ environment:
   sdk: ^3.9.0
 
 dependencies:
-  canon: ^0.0.1
+  canon: ^0.2.0
   flutter:
     sdk: flutter
 dev_dependencies:
   build_runner: ^2.15.0
-  canon_generator: ^0.1.0
+  canon_generator: ^0.2.0
   flutter_test:
     sdk: flutter

@@ -5,7 +5,7 @@ import 'package:canon/canon.dart';
 enum N with ScreenNode<Object?, N> {
   home, feed, profile, chat;
 
-  static N _profile() => profile({profile.again, chat({profile.again})});
+  static N _profile() => profile({profile.cycled, chat({profile.cycled})});
 
   static NavGraph<N> graph() => NavGraph(
         {

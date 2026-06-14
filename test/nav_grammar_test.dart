@@ -6,9 +6,9 @@ enum S with ScreenNode<Object?, S> {
   home, feed, settings, language, profile, friends, chat;
 
   static S _userProfile() => profile({
-        profile.again,
-        friends({profile.again}),
-        chat({profile.again}),
+        profile.cycled,
+        friends({profile.cycled}),
+        chat({profile.cycled}),
       });
 
   static NavSpec<S> spec() => NavSpec({
@@ -44,7 +44,7 @@ void main() {
     });
 
     test('again with no ancestor throws at build', () {
-      expect(() => NavSpec<S>({S.home({S.friends.again})}),
+      expect(() => NavSpec<S>({S.home({S.friends.cycled})}),
           throwsStateError);
     });
 
@@ -54,7 +54,7 @@ void main() {
     });
 
     test('a failed build never poisons the next construction', () {
-      expect(() => NavSpec<S>({S.home({S.friends.again})}),
+      expect(() => NavSpec<S>({S.home({S.friends.cycled})}),
           throwsStateError);
       final s = S.spec();
       expect(s.canonical[S.home]!.children.map((n) => n.screen), [S.profile]);
@@ -67,6 +67,30 @@ void main() {
       expect(s.isMulti(S.friends), isTrue); // placed under both home and feed
       expect(s.isMulti(S.settings), isFalse);
       expect(s.isMulti(S.language), isFalse);
+    });
+  });
+
+  group('structure signature', () {
+    test('is sibling-order independent', () {
+      final a = NavSpec<S>({S.home({S.settings, S.language})}).structureSignature;
+      final b = NavSpec<S>({S.home({S.language, S.settings})}).structureSignature;
+      expect(a, b);
+    });
+
+    test('re-parenting changes the signature', () {
+      final a = NavSpec<S>({S.home({S.language}), S.settings()}).structureSignature;
+      final b = NavSpec<S>({S.home(), S.settings({S.language})}).structureSignature;
+      expect(a, isNot(b));
+    });
+
+    test('reflects keep and again flags', () {
+      expect(NavSpec<S>({S.home.keep({S.language})}).structureSignature,
+          contains('homeK('));
+      expect(S.spec().structureSignature, contains('profileA'));
+    });
+
+    test('identical trees produce identical signatures', () {
+      expect(S.spec().structureSignature, S.spec().structureSignature);
     });
   });
 
@@ -186,6 +210,33 @@ void main() {
       resolveGo(s, [s.entry(S.home)], S.language, null,
           onCanonicalFallback: (m) => warned = m);
       expect(warned, contains('language'));
+    });
+  });
+
+  group('stacked back-edge', () {
+    test('cycled folds a completed cycle; stacked pushes a fresh instance', () {
+      final cycled = NavSpec<S>({S.profile({S.chat({S.profile.cycled})})});
+      final stacked = NavSpec<S>({S.profile({S.chat({S.profile.stacked})})});
+      List<StackEntry<S>> stk(NavSpec<S> s) => [
+            s.entry(S.profile, 'a'),
+            s.entry(S.chat, ('x', 'a')),
+            s.entry(S.profile, 'a'),
+            s.entry(S.chat, ('x', 'a')),
+          ];
+      final c = resolveGo(cycled, stk(cycled), S.profile, 'a');
+      expect(c.popCount, 1); // folds back to the previous occurrence
+      expect(c.pushes, isEmpty);
+
+      final s = resolveGo(stacked, stk(stacked), S.profile, 'a');
+      expect(s.popCount, 0); // keeps the stack
+      expect(s.pushes.single.screen, S.profile);
+    });
+
+    test('stacked still no-ops an exact duplicate of the current top', () {
+      final stacked = NavSpec<S>({S.profile({S.profile.stacked})});
+      final r = resolveGo(stacked, [stacked.entry(S.profile, 'a')], S.profile, 'a');
+      expect(r.popCount, 0);
+      expect(r.pushes, isEmpty);
     });
   });
 
