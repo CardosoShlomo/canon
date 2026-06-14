@@ -108,6 +108,16 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   List<StackEntry<S>> get stack =>
       List.unmodifiable([for (final s in _activeScope.slots) s.entry]);
 
+  /// How many entries on the active stack are [screen] (and [id] if given) —
+  /// the cycle depth backing `Screen.on(.x.depth(n))`.
+  int countOf(S screen, [Object? id]) {
+    var n = 0;
+    for (final s in _activeScope.slots) {
+      if (s.entry.screen == screen && (id == null || s.entry.id == id)) n++;
+    }
+    return n;
+  }
+
   /// The live placement path of the active top, root-first — which placement of
   /// the current screen is active. Reads the simulation mid-chain so generated
   /// `.placement` narrowing resolves against the just-performed go.

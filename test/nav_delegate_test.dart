@@ -201,4 +201,15 @@ void main() {
     expect(() => graph.pop(), throwsStateError); // nothing above the root
     expect(() => graph.pop(N.feed), throwsStateError); // feed not in the stack
   });
+
+  testWidgets('countOf counts active-stack occurrences (cycle depth)', (tester) async {
+    final graph = await pump(tester);
+    graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b');
+    await tester.pumpAndSettle();
+    expect(graph.countOf(N.profile), 2); // a and b
+    expect(graph.countOf(N.profile, 'a'), 1); // just a
+    expect(graph.countOf(N.profile, 'z'), 0); // absent id
+    expect(graph.countOf(N.chat), 1);
+    expect(graph.countOf(N.feed), 0); // parked tab, not the active stack
+  });
 }
