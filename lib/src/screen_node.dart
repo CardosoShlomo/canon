@@ -337,8 +337,10 @@ NavResolution<S> resolveGo<S extends ScreenNode<Object?, S>>(
   );
 }
 
-/// The reverse verb: pop once, or pop until the nearest [until] (it survives).
-/// Null when the pop is impossible.
+/// The reverse verb: pop once, or pop to the nearest [until] STRICTLY BELOW the
+/// top (it survives). Skipping the top means popTo of the screen you are on
+/// reaches the previous occurrence (self-pop), not a no-op — chain it to step
+/// back through a cycle. Null when impossible.
 NavResolution<S>? resolvePop<S extends ScreenNode<Object?, S>>(
   List<StackEntry<S>> stack,
   S? until,
@@ -346,7 +348,7 @@ NavResolution<S>? resolvePop<S extends ScreenNode<Object?, S>>(
   if (until == null) {
     return stack.length > 1 ? const NavResolution(popCount: 1) : null;
   }
-  for (var i = stack.length - 1; i >= 0; i--) {
+  for (var i = stack.length - 2; i >= 0; i--) {
     if (stack[i].screen == until) {
       return NavResolution(popCount: stack.length - 1 - i);
     }

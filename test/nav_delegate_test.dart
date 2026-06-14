@@ -202,6 +202,24 @@ void main() {
     expect(() => graph.pop(N.feed), throwsStateError); // feed not in the stack
   });
 
+  testWidgets('self-pop reaches the previous occurrence, skipping the top', (tester) async {
+    final graph = await pump(tester);
+    graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b'); // [home, p:a, chat, p:b]
+    await tester.pumpAndSettle();
+    graph.pop(N.profile); // self-pop: to the previous profile (a), not a no-op
+    await tester.pumpAndSettle();
+    expect(graph.current, N.profile);
+    expect(graph.stack.last.id, 'a');
+    expect(graph.stack.length, 2); // [home, p:a]
+  });
+
+  testWidgets('self-pop throws when there is no earlier occurrence', (tester) async {
+    final graph = await pump(tester);
+    graph.go(N.profile, 'a'); // only one profile
+    await tester.pumpAndSettle();
+    expect(() => graph.pop(N.profile), throwsStateError);
+  });
+
   testWidgets('countOf counts active-stack occurrences (cycle depth)', (tester) async {
     final graph = await pump(tester);
     graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b');
