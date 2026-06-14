@@ -178,4 +178,27 @@ void main() {
     expect(graph.stack.length, 3);
     expect(find.text('chat:c'), findsOneWidget);
   });
+
+  testWidgets('edge-required go resolves a reachable target', (tester) async {
+    final graph = await pump(tester);
+    graph.go(N.profile, 'a', true); // profile is a live edge of home
+    await tester.pumpAndSettle();
+    expect(find.text('profile:a'), findsOneWidget);
+  });
+
+  testWidgets('edge-required go throws on an unreachable target', (tester) async {
+    final graph = await pump(tester);
+    // feed is a sibling root, not an edge from home — the stale-handle case.
+    expect(() => graph.go(N.feed, null, true), throwsStateError);
+    // the failed batch is discarded; the graph still works afterward.
+    graph.go(N.profile, 'a');
+    await tester.pumpAndSettle();
+    expect(find.text('profile:a'), findsOneWidget);
+  });
+
+  testWidgets('guaranteed pop throws when impossible', (tester) async {
+    final graph = await pump(tester);
+    expect(() => graph.pop(), throwsStateError); // nothing above the root
+    expect(() => graph.pop(N.feed), throwsStateError); // feed not in the stack
+  });
 }

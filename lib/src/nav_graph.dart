@@ -97,7 +97,6 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   late S _activeRoot;
   _Sim<S>? _sim;
   bool _scheduled = false;
-  bool _aborted = false;
   late final Nav<S> _nav = Nav._(this);
 
   S get current => _activeScope.slots.last.entry.screen;
@@ -137,11 +136,23 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
         _activeRoot,
       );
 
-  Nav<S> go<I>(ScreenNode<I, S> screen, [I? id]) {
+  Nav<S> go<I>(ScreenNode<I, S> screen, [I? id, bool edgeRequired = false]) {
     assert(id != null || null is I || I == Never, '"${screen.name}" requires an id');
-    if (_aborted) return _nav;
     final sim = _ensureSim();
     final target = screen as S;
+    // A position-anchored verb (a narrowed handle) demands a live edge: a
+    // stale-but-still-legal target resolves, a stale-and-unreachable one throws
+    // rather than silently teleporting via the canonical fallback.
+    if (edgeRequired) {
+      if (sim.stack.isEmpty || spec.edge(sim.stack.last.node, target) == null) {
+        final from = sim.stack.isEmpty ? 'an empty stack' : sim.stack.last.screen.name;
+        _sim = null; // discard the pending batch — nothing commits
+        throw StateError(
+            'cannot go to "${target.name}" from "$from" — not a reachable edge (stale handle?)');
+      }
+      _apply(sim, resolveGo<S>(spec, sim.stack, target, id));
+      return _nav;
+    }
     final root = spec.rootOf(target);
     if (root != sim.active) {
       // Leaving a non-kept scope resets it; a kept scope parks untouched.
@@ -168,15 +179,12 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   /// target is reachable, so failing is a generator/programmer error, asserted
   /// in debug. Chainable.
   Nav<S> pop([S? until]) {
-    if (_aborted) return _nav;
     final sim = _ensureSim();
     final res = resolvePop<S>(sim.stack, until);
-    assert(res != null,
-        'pop(${until?.name ?? ''}) is impossible from ${sim.stack.map((e) => e.screen.name)} — use maybePop for unprovable pops');
     if (res == null) {
-      _aborted = true;
-      _sim = null;
-      return _nav;
+      _sim = null; // discard the pending batch — nothing commits
+      throw StateError(
+          'pop(${until?.name ?? ''}) is impossible from ${sim.stack.map((e) => e.screen.name)} — use maybePop for unprovable pops');
     }
     _apply(sim, res);
     return _nav;
@@ -185,7 +193,6 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   /// An unprovable pop: pops to [until] (or one level) if possible, else does
   /// nothing. Returns whether it popped. The bool replaces a pop exception.
   bool maybePop([S? until]) {
-    if (_aborted) return false;
     final sim = _ensureSim();
     final res = resolvePop<S>(sim.stack, until);
     if (res == null) return false;
@@ -196,7 +203,6 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   /// Collapses [screen]'s scope to its bare root without navigating — parked
   /// or active. Scope maintenance, deliberately not chainable.
   void reset(S screen) {
-    if (_aborted) return;
     final sim = _ensureSim();
     final root = spec.rootOf(screen);
     sim.stacks[root] = [_seed(root)];
@@ -219,7 +225,6 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   void _commit() {
     final sim = _sim;
     _scheduled = false;
-    _aborted = false;
     _sim = null;
     if (sim == null) return;
     for (final entry in sim.stacks.entries) {
