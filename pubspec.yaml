@@ -1,5 +1,5 @@
 name: canon
-description: "Compile-safe Flutter navigation from a single grammar."
+description: "Compile-safe Flutter navigation from a single grammar tree."
 version: 0.9.0
 repository: https://github.com/CardosoShlomo/canon
 
