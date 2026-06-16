@@ -1,3 +1,9 @@
+## 0.7.0
+
+- **`inherit` — a placement's id is structurally an ancestor's.** `ad({editAd.inherit(ad)})` declares `editAd.id == ad.id`; the generated chained push verb takes no id (`Screen.on(.ad)?.goEditAd()` / `goAd(id).goEditAd()`) and reads the live ancestor id, so the two ids can never diverge. Runtime adds a no-op `inherit(S ancestor)` marker on `ScreenNodeBase`.
+- **Breaking: tree sets are now `Set<TreeNode<S>>`.** A new `sealed class TreeNode<S>` is the grammar set element type; the spec enum implements it via the `ScreenNode` mixin, and `cycled`/`stacked` now return a first-class `_BackEdge<S>` instead of the screen. This (a) makes chaining after a back-edge (`.cycled.inherit(…)`) a compile error, (b) rejects foreign/other-graph elements in a tree set, and (c) removes the per-family stash for back-edges. Tree literals are unaffected (the element type is inferred); only code that named the `Set<S>` root/children types directly needs `Set<TreeNode<S>>`.
+- Pairs with canon_generator ^0.8.0 (adds `Screen.on(.parentOf.x)?.go(…)` scope-agnostic push).
+
 ## 0.6.0
 
 - **Breaking: `ScreenNode` now dictates the widget.** The grammar engine stays pure-Dart by being generic over the widget type (`mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum { W get widget; ... }`), and the Flutter layer binds it: `typedef ScreenNode<S extends ScreenNodeBase<S, Widget>> = ScreenNodeBase<S, Widget>`. Consumers now write the **one-arg** `enum _Screens with ScreenNode<_Screens>` and must provide `final Widget widget`. The vestigial id type param `I` is dropped (per-screen id types come from the generator, not the mixin). Engine generics bound `<S, Object>` and accept consumer `<S, Widget>` via covariance.

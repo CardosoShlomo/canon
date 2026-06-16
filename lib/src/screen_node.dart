@@ -41,14 +41,31 @@ final class GrammarNode<S extends ScreenNodeBase<S, Object>> {
       again ? '${screen.name}.${collapse ? 'cycled' : 'stacked'}' : screen.name;
 }
 
-// Nodes created by call/again awaiting their parent. Set literals evaluate
+/// What a grammar set literal may contain: either a screen (the enum, via
+/// `ScreenNodeBase`) or a `cycled`/`stacked` back-edge. `sealed` closes the
+/// inhabitant set to canon, and the `<S>` pins it to one screen family — so a
+/// tree set rejects foreign types, other graphs' screens, and (because a
+/// back-edge exposes no methods) any chaining after `.cycled`/`.stacked`.
+sealed class TreeNode<S> {}
+
+/// A `cycled`/`stacked` back-edge as a first-class set element (replaces the
+/// old per-family stash side-channel). Carries the screen and fold mode; has no
+/// methods, so `.cycled.inherit(...)` and the like cannot be written.
+final class _BackEdge<S> extends TreeNode<S> {
+  _BackEdge(this.screen, {required this.collapse});
+  final S screen;
+  final bool collapse;
+}
+
+// Nodes created by call/keep awaiting their parent. Set literals evaluate
 // depth-first left-to-right, so a parent's call() runs after its children's.
 // Keyed per family so one enum's nodes can never graft into another's tree.
 final Map<Type, List<Object>> _stashes = {};
 
 List<Object> _stashOf(Type family) => _stashes.putIfAbsent(family, () => []);
 
-mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum {
+mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum
+    implements TreeNode<S> {
   /// This screen's widget. The public `ScreenNode` alias binds W to `Widget`;
   /// the engine stays Flutter-free by keeping it an abstract type parameter.
   W get widget;
@@ -56,18 +73,26 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum {
   S get _self => this as S;
 
   /// Declares a placement of this screen with [children] as its continuations.
-  /// Returns the screen itself so tree literals type as Set<S>.
-  S call([Set<S> children = const {}]) => _place(children, keep: false);
+  /// Returns the screen itself so tree literals type as Set<TreeNode<S>>.
+  S call([Set<TreeNode<S>> children = const {}]) => _place(children, keep: false);
 
   /// A preserved placement: leaving this scope parks its live stack (widgets
   /// retained); returning resumes it as-is. Roots only.
-  S keep([Set<S> children = const {}]) => _place(children, keep: true);
+  S keep([Set<TreeNode<S>> children = const {}]) => _place(children, keep: true);
 
-  S _place(Set<S> children, {required bool keep}) {
+  S _place(Set<TreeNode<S>> children, {required bool keep}) {
     final node = GrammarNode<S>(_self, keep: keep);
     for (final child in children) {
-      // Tail-first so a nested set never steals an outer sibling's stash.
-      final childNode = takeStash<S>(child) ?? GrammarNode<S>(child);
+      // A back-edge carries its own node; a screen claims its stashed
+      // call()/keep() node (tail-first, so a nested set never steals an outer
+      // sibling's) or, if bare, is a leaf.
+      final GrammarNode<S> childNode;
+      if (child is _BackEdge<S>) {
+        childNode = GrammarNode<S>(child.screen, again: true, collapse: child.collapse);
+      } else {
+        final s = child as S;
+        childNode = takeStash<S>(s) ?? GrammarNode<S>(s);
+      }
       childNode.parent = node;
       node.children.add(childNode);
     }
@@ -78,18 +103,19 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum {
   /// Back-edge that folds a completed duplicate cycle: revisiting the same
   /// (screen, id) block already on the stack pops back to it instead of growing.
   /// Loops to the nearest same-screen ancestor node.
-  S get cycled {
-    _stashOf(S).add(GrammarNode<S>(_self, again: true));
-    return _self;
-  }
+  _BackEdge<S> get cycled => _BackEdge<S>(_self, collapse: true);
 
   /// Back-edge that stacks a fresh instance on every revisit, preserving the
   /// intermediate stack (the only guard is the universal no-op when the target
   /// equals the current top). Loops to the nearest same-screen ancestor node.
-  S get stacked {
-    _stashOf(S).add(GrammarNode<S>(_self, again: true, collapse: false));
-    return _self;
-  }
+  _BackEdge<S> get stacked => _BackEdge<S>(_self, collapse: false);
+
+  /// Declares this placement's id as [ancestor]'s (structurally): the generated
+  /// push verb takes no id and reads the live ancestor id instead. Read
+  /// syntactically by the generator; a runtime no-op that returns self so it
+  /// composes in the tree. Lives on the screen (not on a back-edge), so
+  /// `.cycled.inherit(...)` is unrepresentable.
+  S inherit(S ancestor) => _self;
 
   static GrammarNode<S>? takeStash<S extends ScreenNodeBase<S, Object>>(S screen) {
     final stash = _stashOf(S);
@@ -107,10 +133,16 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum {
 /// The validated grammar: canonical placements, kinds, and the legality oracle.
 @internal
 final class NavSpec<S extends ScreenNodeBase<S, Object>> {
-  NavSpec(Set<S> rootScreens) {
+  NavSpec(Set<TreeNode<S>> rootScreens) {
     final stash = _stashOf(S);
     try {
-      for (final screen in rootScreens) {
+      for (final root in rootScreens) {
+        if (root is _BackEdge<S>) {
+          throw StateError(
+              'a back-edge (${root.screen}.${root.collapse ? 'cycled' : 'stacked'}) '
+              'cannot be a root');
+        }
+        final screen = root as S;
         roots.add(ScreenNodeBase.takeStash<S>(screen) ?? GrammarNode<S>(screen));
       }
       assert(stash.isEmpty,

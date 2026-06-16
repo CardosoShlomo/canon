@@ -15,6 +15,7 @@ enum _Screens with ScreenNode<_Screens> {
   feed(_Page('Feed')),
   profile(_Page('Profile')),
   item(_Page('Item'), String), // a detail screen keyed by an id
+  editItem(_Page('Edit item'), String), // its id IS item's (see .inherit below)
   settings(_Page('Settings')),
   about(_Page('About'));
 
@@ -27,8 +28,10 @@ enum _Screens with ScreenNode<_Screens> {
       splash,
       signIn,
       // `.keep` preserves a tab's stack when you switch away and back.
-      home.keep({item, settings({about})}),
-      feed.keep({item}), // `item` lives under two tabs → placement narrowing
+      // `.inherit(item)` makes editItem's id structurally item's: its push verb
+      // takes no id (`goEditItem()`), reading the live item id instead.
+      home.keep({item({editItem.inherit(item)}), settings({about})}),
+      feed.keep({item({editItem.inherit(item)})}), // item lives under two tabs
       profile.keep({settings({about})}),
     },
     initial: splash,

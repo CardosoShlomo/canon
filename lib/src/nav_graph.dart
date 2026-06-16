@@ -80,7 +80,7 @@ class _Sim<S extends ScreenNodeBase<S, Object>> {
 
 final class NavGraph<S extends ScreenNodeBase<S, Object>> {
   NavGraph(
-    Set<S> rootScreens, {
+    Set<TreeNode<S>> rootScreens, {
     required this.pageOf,
     required S initial,
     List<NavigatorObserver> Function()? observers,
