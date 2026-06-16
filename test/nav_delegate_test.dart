@@ -10,12 +10,12 @@ enum N with ScreenNode<N> {
 
   static N _profile() => profile({profile.cycled, chat({profile.cycled})});
 
-  static NavGraph<N> graph() => NavGraph(
+  static NavGraph<N, _Init> graph() => NavGraph(
         {
           home.keep({_profile()}),
           feed({_profile()}),
         },
-        initial: home,
+        initial: const _Init([(home, null)]),
         pageOf: (screen, ctx, key) => MaterialPage(
           key: key,
           child: ScreenScope(
@@ -26,8 +26,15 @@ enum N with ScreenNode<N> {
       );
 }
 
+// A raw InitialScreenBase for engine tests (the typed surface is generated).
+class _Init implements InitialScreenBase<N> {
+  const _Init(this.chain);
+  @override
+  final List<(N, Object?)> chain;
+}
+
 void main() {
-  Future<NavGraph<N>> pump(WidgetTester tester) async {
+  Future<NavGraph<N, _Init>> pump(WidgetTester tester) async {
     final graph = N.graph();
     await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
     return graph;
@@ -49,6 +56,27 @@ void main() {
     expect(graph.stack.length, 1);
   });
 
+  testWidgets('initial seeds a multi-entry starting stack', (tester) async {
+    final graph = NavGraph<N, _Init>(
+      {N.home.keep({N._profile()}), N.feed()},
+      initial: const _Init([(N.home, null), (N.profile, 'p')]),
+      pageOf: (screen, ctx, key) => MaterialPage(
+        key: key,
+        child: ScreenScope(
+          entry: ctx.entry,
+          child: Text('${screen.name}:${ctx.entry.id ?? ''}'),
+        ),
+      ),
+    );
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
+    await tester.pumpAndSettle();
+    expect(find.text('profile:p'), findsOneWidget); // top of seeded chain
+    expect(graph.stack.length, 2); // home -> profile
+    graph.pop();
+    await tester.pumpAndSettle();
+    expect(find.text('home:'), findsOneWidget);
+  });
+
   testWidgets('id-bearing root: go(root, id) seeds the root id', (tester) async {
     final graph = await pump(tester);
     graph.go(N.feed, 'f'); // switch to the feed root WITH an id
@@ -68,23 +96,6 @@ void main() {
     expect(find.text('feed:f'), findsOneWidget); // ancestor root id stamped
   });
 
-  testWidgets('initialId seeds the initial root', (tester) async {
-    final graph = NavGraph<N>(
-      {N.home.keep(), N.feed()},
-      initial: N.home,
-      initialId: 'h',
-      pageOf: (screen, ctx, key) => MaterialPage(
-        key: key,
-        child: ScreenScope(
-          entry: ctx.entry,
-          child: Text('${screen.name}:${ctx.entry.id ?? ''}'),
-        ),
-      ),
-    );
-    await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
-    await tester.pumpAndSettle();
-    expect(find.text('home:h'), findsOneWidget);
-  });
 
   testWidgets('observe fires (from, to) per commit; disposer stops it',
       (tester) async {

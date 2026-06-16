@@ -44,9 +44,9 @@ final class ScreenScope<S extends ScreenNodeBase<S, Object>> extends InheritedWi
 final class Nav<S extends ScreenNodeBase<S, Object>> {
   Nav._(this._graph);
 
-  final NavGraph<S> _graph;
+  final NavGraph<S, dynamic> _graph;
 
-  Nav<S> go<I>(covariant ScreenNodeBase<S, Object> screen, [I? id]) =>
+  Nav<S> go<T>(covariant ScreenNodeBase<S, Object> screen, [T? id]) =>
       _graph.go(screen, id);
 
   Nav<S> pop([S? until]) => _graph.pop(until);
@@ -78,20 +78,42 @@ class _Sim<S extends ScreenNodeBase<S, Object>> {
   List<StackEntry<S>> get stack => stacks[active]!;
 }
 
-final class NavGraph<S extends ScreenNodeBase<S, Object>> {
+/// The starting stack, as a pure root..target chain of (screen, id). The
+/// generated `InitialScreen` is the only thing implementing this, so `initial:`
+/// rejects a navigating `Screen.goX` or a live-stack `Screen.on(...)`. Consumers
+/// never assemble the chain by hand — they write `initial: .home.userProfile(id)`.
+abstract interface class InitialScreenBase<S extends ScreenNodeBase<S, Object>> {
+  List<(S, Object?)> get chain;
+}
+
+final class NavGraph<S extends ScreenNodeBase<S, Object>,
+    I extends InitialScreenBase<S>> {
   NavGraph(
     Set<TreeNode<S>> rootScreens, {
     required this.pageOf,
-    required S initial,
-    Object? initialId,
+    required I initial,
     List<NavigatorObserver> Function()? observers,
   })  : _observers = observers ?? (() => []),
         spec = NavSpec<S>(rootScreens) {
     delegate = NavDelegate<S>._(this);
-    _activeRoot = spec.rootOf(initial);
-    // An id-bearing initial root must be seeded with its id (required when the
-    // root declares an id type — without it the root entry would be null-id).
-    _scopeOf(_activeRoot, initialId);
+    final chain = initial.chain;
+    _activeRoot = chain.first.$1;
+    final scope = _Scope<S>();
+    var node = spec.canonical[_activeRoot]!;
+    S? from;
+    for (var i = 0; i < chain.length; i++) {
+      final (screen, id) = chain[i];
+      if (i > 0) {
+        node = spec.edge(node, screen) ??
+            (throw StateError('invalid initial chain at "${screen.name}"'));
+      }
+      final entry = StackEntry(node, id);
+      scope.slots.add(_Slot(entry, _buildPage(entry, animate: false, from: from)));
+      from = screen;
+    }
+    _scopes[_activeRoot] = scope;
+    _visited.add(_activeRoot);
+    _visited.sort((a, b) => a.index.compareTo(b.index));
   }
 
   final NavSpec<S> spec;
@@ -165,8 +187,8 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>> {
         _activeRoot,
       );
 
-  Nav<S> go<I>(ScreenNodeBase<S, Object> screen, [I? id, bool edgeRequired = false]) {
-    assert(id != null || null is I || I == Never, '"${screen.name}" requires an id');
+  Nav<S> go<T>(ScreenNodeBase<S, Object> screen, [T? id, bool edgeRequired = false]) {
+    assert(id != null || null is T || T == Never, '"${screen.name}" requires an id');
     final sim = _ensureSim();
     final target = screen as S;
     // A position-anchored verb (a narrowed handle) demands a live edge: a
@@ -326,7 +348,7 @@ final class NavDelegate<S extends ScreenNodeBase<S, Object>> extends RouterDeleg
     with ChangeNotifier, PopNavigatorRouterDelegateMixin<Object> {
   NavDelegate._(this._graph);
 
-  final NavGraph<S> _graph;
+  final NavGraph<S, dynamic> _graph;
 
   @override
   GlobalKey<NavigatorState> get navigatorKey => _graph._activeScope.navKey;

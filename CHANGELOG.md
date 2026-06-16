@@ -1,3 +1,8 @@
+## 0.9.0
+
+- **Breaking: `initial:` is now a typed `InitialScreen`.** `NavGraph` is `NavGraph<S, I extends InitialScreenBase<S>>` and `initial` takes an `I` — the generated `InitialScreen` (e.g. `NavGraph<_Screens, InitialScreen>(initial: .home.settings.about)`). It seeds the entire root..target chain, so the start can be any reachable stack, not just a root. Only an `InitialScreen` is accepted, so a navigating `Screen.goX` or a live-stack `Screen.on(...)` can't be passed as the initial.
+- **Removed `initialId`** (shipped in 0.8.0) — superseded by the typed `initial`. An id-bearing initial is expressed as `initial: .someRoot(id)` / a chain.
+
 ## 0.8.0
 
 - **Roots can carry ids.** `go(root, id)` now seeds (or reseeds, when the id differs) the root scope with that id instead of dropping it, and `NavGraph(initialId: …)` seeds the initial root. An id-bearing root is identified by its id (entering it with a different id reseeds; id-free roots pass null and resume their parked stack unchanged). This closes the gap where an `inherit` chain rooted at an id-bearing root couldn't stamp the root's id — `inherit(home)`-style chains and the kick-start rescue from a root source now work.
