@@ -1,3 +1,7 @@
+## 0.8.0
+
+- **Roots can carry ids.** `go(root, id)` now seeds (or reseeds, when the id differs) the root scope with that id instead of dropping it, and `NavGraph(initialId: …)` seeds the initial root. An id-bearing root is identified by its id (entering it with a different id reseeds; id-free roots pass null and resume their parked stack unchanged). This closes the gap where an `inherit` chain rooted at an id-bearing root couldn't stamp the root's id — `inherit(home)`-style chains and the kick-start rescue from a root source now work.
+
 ## 0.7.0
 
 - **`inherit` — a placement's id is structurally an ancestor's.** `ad({editAd.inherit(ad)})` declares `editAd.id == ad.id`; the generated chained push verb takes no id (`Screen.on(.ad)?.goEditAd()` / `goAd(id).goEditAd()`) and reads the live ancestor id, so the two ids can never diverge. Runtime adds a no-op `inherit(S ancestor)` marker on `ScreenNodeBase`.

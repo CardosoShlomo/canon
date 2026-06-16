@@ -83,12 +83,15 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>> {
     Set<TreeNode<S>> rootScreens, {
     required this.pageOf,
     required S initial,
+    Object? initialId,
     List<NavigatorObserver> Function()? observers,
   })  : _observers = observers ?? (() => []),
         spec = NavSpec<S>(rootScreens) {
     delegate = NavDelegate<S>._(this);
     _activeRoot = spec.rootOf(initial);
-    _scopeOf(_activeRoot);
+    // An id-bearing initial root must be seeded with its id (required when the
+    // root declares an id type — without it the root entry would be null-id).
+    _scopeOf(_activeRoot, initialId);
   }
 
   final NavSpec<S> spec;
@@ -149,12 +152,12 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>> {
 
   _Scope<S> get _activeScope => _scopes[_activeRoot]!;
 
-  StackEntry<S> _seed(S root) => StackEntry(spec.canonical[root]!, null);
+  StackEntry<S> _seed(S root, [Object? id]) => StackEntry(spec.canonical[root]!, id);
 
-  _Scope<S> _scopeOf(S root) => _scopes.putIfAbsent(root, () {
+  _Scope<S> _scopeOf(S root, [Object? id]) => _scopes.putIfAbsent(root, () {
         _visited.add(root);
         _visited.sort((a, b) => a.index.compareTo(b.index));
-        return _Scope<S>()..slots.add(_Slot(_seed(root), _buildPage(_seed(root), animate: false, from: null)));
+        return _Scope<S>()..slots.add(_Slot(_seed(root, id), _buildPage(_seed(root, id), animate: false, from: null)));
       });
 
   _Sim<S> _ensureSim() => _sim ??= _Sim(
@@ -186,7 +189,14 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>> {
         sim.stacks[sim.active] = [_seed(sim.active)];
       }
       sim.active = root;
-      sim.stacks.putIfAbsent(root, () => [_seed(root)]);
+      final seeded = sim.stacks.putIfAbsent(root, () => [_seed(root, id)]);
+      // An id-bearing root is identified by its id: entering it with a different
+      // id reseeds the scope (this is what makes `go(root, id)` — and an
+      // inherit chain rooted at an id-bearing root — stamp the root id). Id-free
+      // roots pass id == null and resume their parked stack as-is.
+      if (id != null && seeded.first.id != id) {
+        sim.stacks[root] = [_seed(root, id)];
+      }
       // Switching to the root itself resumes the stack as-is; the ladder
       // only runs when the hop continues deeper. A repeat go (no switch)
       // still collapses canonically.

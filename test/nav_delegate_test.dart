@@ -49,6 +49,43 @@ void main() {
     expect(graph.stack.length, 1);
   });
 
+  testWidgets('id-bearing root: go(root, id) seeds the root id', (tester) async {
+    final graph = await pump(tester);
+    graph.go(N.feed, 'f'); // switch to the feed root WITH an id
+    await tester.pumpAndSettle();
+    expect(find.text('feed:f'), findsOneWidget); // stamped, not null
+  });
+
+  testWidgets('inherit-from-root shape: chain off an id-bearing root keeps its id',
+      (tester) async {
+    final graph = await pump(tester);
+    graph.go(N.feed, 'f'); // kick-start to the root with the shared id
+    graph.go(N.profile, 'f', true); // ...edge down (rescue body shape)
+    await tester.pumpAndSettle();
+    expect(find.text('profile:f'), findsOneWidget);
+    graph.pop();
+    await tester.pumpAndSettle();
+    expect(find.text('feed:f'), findsOneWidget); // ancestor root id stamped
+  });
+
+  testWidgets('initialId seeds the initial root', (tester) async {
+    final graph = NavGraph<N>(
+      {N.home.keep(), N.feed()},
+      initial: N.home,
+      initialId: 'h',
+      pageOf: (screen, ctx, key) => MaterialPage(
+        key: key,
+        child: ScreenScope(
+          entry: ctx.entry,
+          child: Text('${screen.name}:${ctx.entry.id ?? ''}'),
+        ),
+      ),
+    );
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
+    await tester.pumpAndSettle();
+    expect(find.text('home:h'), findsOneWidget);
+  });
+
   testWidgets('observe fires (from, to) per commit; disposer stops it',
       (tester) async {
     final graph = await pump(tester);
