@@ -325,12 +325,13 @@ NavResolution<S> resolveGo<S extends ScreenNodeBase<S, Object>>(
 }) {
   // Repeat-collapse: pushing would complete an immediately repeated block of
   // length p — pop to the block's previous occurrence instead of duplicating.
-  // p == 1 (an exact duplicate of the current top) is a universal no-op guard;
-  // the p >= 2 cycle fold is suppressed when the edge is a `stacked` back-edge.
+  // For collapsing edges, p == 1 is the exact-duplicate no-op and p >= 2 folds
+  // a completed cycle. A `stacked` back-edge never collapses — it pushes a fresh
+  // instance every revisit, even an exact duplicate of the current top.
   final n = stack.length;
   final fold = stack.isEmpty || spec.edgeCollapses(stack.last.node, target);
   for (var p = 1; 2 * p <= n + 1; p++) {
-    if (p > 1 && !fold) break;
+    if (!fold) break;
     if (!_matches(stack[n - p], target, id)) continue;
     var periodic = true;
     for (var i = 0; i < p - 1; i++) {

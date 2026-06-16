@@ -1,3 +1,7 @@
+## 0.9.1
+
+- Fix: a `.stacked` back-edge now pushes a fresh instance even when the target is an exact duplicate of the current top (e.g. `userProfile(x)` from `userProfile(x)`). The universal p==1 exact-duplicate no-op no longer applies to non-collapsing edges, matching `.stacked`'s "fresh instance every revisit" semantics. Collapsing/`.cycled` and forward edges keep the duplicate guard.
+
 ## 0.9.0
 
 - **Breaking: `initial:` is now a typed `InitialScreen`.** `NavGraph` is `NavGraph<S, I extends InitialScreenBase<S>>` and `initial` takes an `I` — the generated `InitialScreen` (e.g. `NavGraph<_Screens, InitialScreen>(initial: .home.settings.about)`). It seeds the entire root..target chain, so the start can be any reachable stack, not just a root. Only an `InitialScreen` is accepted, so a navigating `Screen.goX` or a live-stack `Screen.on(...)` can't be passed as the initial.

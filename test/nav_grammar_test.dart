@@ -236,11 +236,13 @@ void main() {
       expect(s.pushes.single.screen, S.profile);
     });
 
-    test('stacked still no-ops an exact duplicate of the current top', () {
+    test('stacked pushes a fresh instance even for an exact duplicate of the top', () {
       final stacked = NavSpec<S>({S.profile({S.profile.stacked})});
       final r = resolveGo(stacked, [stacked.entry(S.profile, 'a')], S.profile, 'a');
       expect(r.popCount, 0);
-      expect(r.pushes, isEmpty);
+      expect(r.pushes.length, 1);
+      expect(r.pushes.single.screen, S.profile);
+      expect(r.pushes.single.id, 'a');
     });
   });
 
