@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:canon/canon.dart';
 
-enum N with ScreenNode<Object?, N> {
+enum N with ScreenNode<N> {
   home, feed, profile, chat;
+
+  @override
+  Widget get widget => Text(name);
 
   static N _profile() => profile({profile.cycled, chat({profile.cycled})});
 

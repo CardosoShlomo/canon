@@ -1,3 +1,7 @@
+## 0.6.0
+
+- **Breaking: `ScreenNode` now dictates the widget.** The grammar engine stays pure-Dart by being generic over the widget type (`mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum { W get widget; ... }`), and the Flutter layer binds it: `typedef ScreenNode<S extends ScreenNodeBase<S, Widget>> = ScreenNodeBase<S, Widget>`. Consumers now write the **one-arg** `enum _Screens with ScreenNode<_Screens>` and must provide `final Widget widget`. The vestigial id type param `I` is dropped (per-screen id types come from the generator, not the mixin). Engine generics bound `<S, Object>` and accept consumer `<S, Widget>` via covariance.
+
 ## 0.5.0
 
 - Add `NavGraph.observe(fn)` — a side-effect listener fired after each navigation commits (new top settled, before its transition animates), with `(from, to)` screens; returns a disposer. Pure observation (no veto/reroute), meant to be wired where state lives (e.g. a provider). The generator surfaces it typed as `Screen.observe((Screen from, Screen to) {...})`. The "after transition settled" phase is deferred to the origin collaboration.

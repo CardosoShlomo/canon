@@ -13,11 +13,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(Screen.stack.current.name, 'home');
 
-    Screen.goItem('42');
+    // `item` is a union (under home & feed) → no global verb; chain off the
+    // home handle (we're on home) to reach the home placement.
+    Screen.on(.home)!.goItem('42');
     await tester.pumpAndSettle();
     expect(Screen.stack.current.name, 'item');
 
-    expect(Screen.maybePop(), isTrue); // back to home
+    expect(Screen.pop(), isNotNull); // typed global pop → back to home
     await tester.pumpAndSettle();
     expect(Screen.stack.current.name, 'home');
   });

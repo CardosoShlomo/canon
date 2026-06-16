@@ -7,3 +7,4 @@ pubspec.lock
 *.nav.dart
 .idea/
 .metadata
+pubspec_overrides.yaml

@@ -5,8 +5,14 @@ import 'package:flutter/widgets.dart';
 
 import 'screen_node.dart';
 
+/// The spec-enum contract: a screen family carrying the grammar AND a `Widget`.
+/// Binds the engine's abstract widget slot to Flutter's `Widget`, so consumers
+/// write the clean 2-arg form and `Widget get widget` is required.
+///   `enum _Screens with ScreenNode<Object?, _Screens> { ... final Widget widget; }`
+typedef ScreenNode<S extends ScreenNodeBase<S, Widget>> = ScreenNodeBase<S, Widget>;
+
 /// The page's grammar identity and transition policy inputs.
-final class PageCtx<S extends ScreenNode<Object?, S>> {
+final class PageCtx<S extends ScreenNodeBase<S, Object>> {
   const PageCtx(this.entry, {this.animate = true, this.from});
 
   final StackEntry<S> entry;
@@ -17,12 +23,12 @@ final class PageCtx<S extends ScreenNode<Object?, S>> {
 }
 
 /// Scopes a page's screen and id to its subtree.
-final class ScreenScope<S extends ScreenNode<Object?, S>> extends InheritedWidget {
+final class ScreenScope<S extends ScreenNodeBase<S, Object>> extends InheritedWidget {
   const ScreenScope({super.key, required this.entry, required super.child});
 
   final StackEntry<S> entry;
 
-  static StackEntry<S> of<S extends ScreenNode<Object?, S>>(BuildContext context) {
+  static StackEntry<S> of<S extends ScreenNodeBase<S, Object>>(BuildContext context) {
     final scope = context.getInheritedWidgetOfExactType<ScreenScope<S>>();
     assert(scope != null, 'no ScreenScope above this context');
     return scope!.entry;
@@ -35,12 +41,12 @@ final class ScreenScope<S extends ScreenNode<Object?, S>> extends InheritedWidge
 /// Chain handle: hops queued in one synchronous expression commit together on
 /// a microtask — one diff, one animation.
 @internal
-final class Nav<S extends ScreenNode<Object?, S>> {
+final class Nav<S extends ScreenNodeBase<S, Object>> {
   Nav._(this._graph);
 
   final NavGraph<S> _graph;
 
-  Nav<S> go<I>(covariant ScreenNode<I, S> screen, [I? id]) =>
+  Nav<S> go<I>(covariant ScreenNodeBase<S, Object> screen, [I? id]) =>
       _graph.go(screen, id);
 
   Nav<S> pop([S? until]) => _graph.pop(until);
@@ -48,7 +54,7 @@ final class Nav<S extends ScreenNode<Object?, S>> {
   bool maybePop([S? until]) => _graph.maybePop(until);
 }
 
-class _Slot<S extends ScreenNode<Object?, S>> {
+class _Slot<S extends ScreenNodeBase<S, Object>> {
   _Slot(this.entry, this.page);
 
   final StackEntry<S> entry;
@@ -56,14 +62,14 @@ class _Slot<S extends ScreenNode<Object?, S>> {
 }
 
 /// One live stack: a root screen's pages plus its Navigator identity.
-class _Scope<S extends ScreenNode<Object?, S>> {
+class _Scope<S extends ScreenNodeBase<S, Object>> {
   final List<_Slot<S>> slots = [];
   final GlobalKey<NavigatorState> navKey = GlobalKey<NavigatorState>();
   final HeroController hero = HeroController();
 }
 
 /// The batch's working state: per-scope stacks plus the active scope.
-class _Sim<S extends ScreenNode<Object?, S>> {
+class _Sim<S extends ScreenNodeBase<S, Object>> {
   _Sim(this.stacks, this.active);
 
   final Map<S, List<StackEntry<S>>> stacks;
@@ -72,7 +78,7 @@ class _Sim<S extends ScreenNode<Object?, S>> {
   List<StackEntry<S>> get stack => stacks[active]!;
 }
 
-final class NavGraph<S extends ScreenNode<Object?, S>> {
+final class NavGraph<S extends ScreenNodeBase<S, Object>> {
   NavGraph(
     Set<S> rootScreens, {
     required this.pageOf,
@@ -156,7 +162,7 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
         _activeRoot,
       );
 
-  Nav<S> go<I>(ScreenNode<I, S> screen, [I? id, bool edgeRequired = false]) {
+  Nav<S> go<I>(ScreenNodeBase<S, Object> screen, [I? id, bool edgeRequired = false]) {
     assert(id != null || null is I || I == Never, '"${screen.name}" requires an id');
     final sim = _ensureSim();
     final target = screen as S;
@@ -306,7 +312,7 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   }
 }
 
-final class NavDelegate<S extends ScreenNode<Object?, S>> extends RouterDelegate<Object>
+final class NavDelegate<S extends ScreenNodeBase<S, Object>> extends RouterDelegate<Object>
     with ChangeNotifier, PopNavigatorRouterDelegateMixin<Object> {
   NavDelegate._(this._graph);
 

@@ -12,7 +12,7 @@ import 'package:meta/meta.dart';
 /// One placement of a screen in the grammar tree. A screen may own several
 /// placements; the first-built one is canonical.
 @internal
-final class GrammarNode<S extends ScreenNode<Object?, S>> {
+final class GrammarNode<S extends ScreenNodeBase<S, Object>> {
   GrammarNode(this.screen, {this.again = false, this.keep = false, this.collapse = true});
 
   final S screen;
@@ -48,7 +48,11 @@ final Map<Type, List<Object>> _stashes = {};
 
 List<Object> _stashOf(Type family) => _stashes.putIfAbsent(family, () => []);
 
-mixin ScreenNode<I, S extends ScreenNode<Object?, S>> on Enum {
+mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W extends Object> on Enum {
+  /// This screen's widget. The public `ScreenNode` alias binds W to `Widget`;
+  /// the engine stays Flutter-free by keeping it an abstract type parameter.
+  W get widget;
+
   S get _self => this as S;
 
   /// Declares a placement of this screen with [children] as its continuations.
@@ -87,7 +91,7 @@ mixin ScreenNode<I, S extends ScreenNode<Object?, S>> on Enum {
     return _self;
   }
 
-  static GrammarNode<S>? takeStash<S extends ScreenNode<Object?, S>>(S screen) {
+  static GrammarNode<S>? takeStash<S extends ScreenNodeBase<S, Object>>(S screen) {
     final stash = _stashOf(S);
     for (var i = stash.length - 1; i >= 0; i--) {
       final node = stash[i] as GrammarNode<S>;
@@ -102,12 +106,12 @@ mixin ScreenNode<I, S extends ScreenNode<Object?, S>> on Enum {
 
 /// The validated grammar: canonical placements, kinds, and the legality oracle.
 @internal
-final class NavSpec<S extends ScreenNode<Object?, S>> {
+final class NavSpec<S extends ScreenNodeBase<S, Object>> {
   NavSpec(Set<S> rootScreens) {
     final stash = _stashOf(S);
     try {
       for (final screen in rootScreens) {
-        roots.add(ScreenNode.takeStash<S>(screen) ?? GrammarNode<S>(screen));
+        roots.add(ScreenNodeBase.takeStash<S>(screen) ?? GrammarNode<S>(screen));
       }
       assert(stash.isEmpty,
           'unclaimed grammar nodes ${stash.join(', ')} — structured mentions '
@@ -212,7 +216,7 @@ final class NavSpec<S extends ScreenNode<Object?, S>> {
 }
 
 /// One page on the runtime stack, as the grammar sees it.
-final class StackEntry<S extends ScreenNode<Object?, S>> {
+final class StackEntry<S extends ScreenNodeBase<S, Object>> {
   const StackEntry(this.node, this.id);
 
   final GrammarNode<S> node;
@@ -266,21 +270,21 @@ final class NavStack<T> {
 
 /// A resolved navigation step: pop [popCount] pages, then push [pushes].
 @internal
-final class NavResolution<S extends ScreenNode<Object?, S>> {
+final class NavResolution<S extends ScreenNodeBase<S, Object>> {
   const NavResolution({this.popCount = 0, this.pushes = const []});
 
   final int popCount;
   final List<StackEntry<S>> pushes;
 }
 
-bool _matches<S extends ScreenNode<Object?, S>>(
+bool _matches<S extends ScreenNodeBase<S, Object>>(
         StackEntry<S> entry, S screen, Object? id) =>
     entry.screen == screen && entry.id == id;
 
 /// The forward verb's ladder: collapse > edge > canonical. Total — canonical
 /// always resolves.
 @internal
-NavResolution<S> resolveGo<S extends ScreenNode<Object?, S>>(
+NavResolution<S> resolveGo<S extends ScreenNodeBase<S, Object>>(
   NavSpec<S> spec,
   List<StackEntry<S>> stack,
   S target,
@@ -341,7 +345,7 @@ NavResolution<S> resolveGo<S extends ScreenNode<Object?, S>>(
 /// top (it survives). Skipping the top means popTo of the screen you are on
 /// reaches the previous occurrence (self-pop), not a no-op — chain it to step
 /// back through a cycle. Null when impossible.
-NavResolution<S>? resolvePop<S extends ScreenNode<Object?, S>>(
+NavResolution<S>? resolvePop<S extends ScreenNodeBase<S, Object>>(
   List<StackEntry<S>> stack,
   S? until,
 ) {

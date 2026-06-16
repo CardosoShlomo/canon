@@ -8,7 +8,7 @@ part 'nav.nav.dart';
 // compile error (you can only `go` to a screen's real children, only `pop`
 // to a real ancestor).
 @screens
-enum _Screens with ScreenNode<Object?, _Screens> {
+enum _Screens with ScreenNode<_Screens> {
   splash(_Page('Splash')),
   signIn(_Page('Sign in')),
   home(_Page('Home')),
@@ -51,20 +51,26 @@ class _Page extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Typed navigation — these calls only compile because the grammar
-            // declares the targets.
+            // `goFeed` is a kick-start (single-placement). `item` lives under
+            // two tabs (a union), so it has no global verb — you chain to it
+            // off a kick-start handle, which picks the placement.
             ElevatedButton(
-              onPressed: () => Screen.goItem('42'),
-              child: const Text('Open item 42'),
+              onPressed: () => Screen.goHome().goItem('42'),
+              child: const Text('Open item 42 (in Home)'),
             ),
+            // Zero-arg kick-start verbs are tear-offs — no closure, no context,
+            // no string path: `onPressed: Screen.goFeed`.
             ElevatedButton(
-              onPressed: () => Screen.goFeed(),
+              onPressed: Screen.goFeed,
               child: const Text('Feed tab'),
             ),
-            ElevatedButton(
-              onPressed: Screen.maybePop,
-              child: const Text('Back'),
-            ),
+            // Back is the typed global pop (also a tear-off), shown only when
+            // there's somewhere to pop (null at a root).
+            if (Screen.canPop != null)
+              ElevatedButton(
+                onPressed: Screen.pop,
+                child: const Text('Back'),
+              ),
           ],
         ),
       ),

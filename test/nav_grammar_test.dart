@@ -2,8 +2,12 @@ import 'package:canon/src/screen_node.dart';
 import 'package:test/test.dart';
 
 // A miniature social-app tree: tabs, a profile cycle, and a leaf settings branch.
-enum S with ScreenNode<Object?, S> {
+enum S with ScreenNodeBase<S, Object> {
   home, feed, settings, language, profile, friends, chat;
+
+  // Pure-VM test: W is bound to Object, widget is irrelevant to the grammar.
+  @override
+  Object get widget => name;
 
   static S _userProfile() => profile({
         profile.cycled,
