@@ -98,8 +98,18 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
   _Sim<S>? _sim;
   bool _scheduled = false;
   late final Nav<S> _nav = Nav._(this);
+  final _navListeners = <void Function(S from, S to)>[];
 
   S get current => _activeScope.slots.last.entry.screen;
+
+  /// Registers a side-effect listener fired AFTER each navigation commits (the
+  /// new top is settled), BEFORE its transition animates — wire it where your
+  /// state lives. Returns a disposer. Pure observation: it cannot veto or
+  /// reroute (the destination is already chosen at the call site).
+  VoidCallback observe(void Function(S from, S to) fn) {
+    _navListeners.add(fn);
+    return () => _navListeners.remove(fn);
+  }
 
   /// Canonical encoding of the live tree's shape — the generator emits the same
   /// string from source, so a mismatch flags stale codegen.
@@ -237,6 +247,7 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
     _scheduled = false;
     _sim = null;
     if (sim == null) return;
+    final fromEntry = _activeScope.slots.last.entry;
     for (final entry in sim.stacks.entries) {
       final scope = _scopeOf(entry.key);
       final target = entry.value;
@@ -262,6 +273,12 @@ final class NavGraph<S extends ScreenNode<Object?, S>> {
     }
     _activeRoot = sim.active;
     _scopeOf(_activeRoot);
+    final toEntry = _activeScope.slots.last.entry;
+    if (!identical(fromEntry, toEntry) && _navListeners.isNotEmpty) {
+      for (final fn in [..._navListeners]) {
+        fn(fromEntry.screen, toEntry.screen);
+      }
+    }
     delegate._refresh();
   }
 

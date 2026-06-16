@@ -46,6 +46,24 @@ void main() {
     expect(graph.stack.length, 1);
   });
 
+  testWidgets('observe fires (from, to) per commit; disposer stops it',
+      (tester) async {
+    final graph = await pump(tester);
+    final seen = <String>[];
+    final off = graph.observe((from, to) => seen.add('${from.name}>${to.name}'));
+    graph.go(N.profile, 'a');
+    await tester.pumpAndSettle();
+    graph.go(N.chat, 'c');
+    await tester.pumpAndSettle();
+    graph.pop();
+    await tester.pumpAndSettle();
+    expect(seen, ['home>profile', 'profile>chat', 'chat>profile']);
+    off();
+    graph.go(N.feed);
+    await tester.pumpAndSettle();
+    expect(seen.length, 3); // disposed: no further events
+  });
+
   testWidgets('chain commits as one diff', (tester) async {
     final graph = await pump(tester);
     graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b');

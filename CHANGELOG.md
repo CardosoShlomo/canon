@@ -1,3 +1,7 @@
+## 0.5.0
+
+- Add `NavGraph.observe(fn)` — a side-effect listener fired after each navigation commits (new top settled, before its transition animates), with `(from, to)` screens; returns a disposer. Pure observation (no veto/reroute), meant to be wired where state lives (e.g. a provider). The generator surfaces it typed as `Screen.observe((Screen from, Screen to) {...})`. The "after transition settled" phase is deferred to the origin collaboration.
+
 ## 0.4.0
 
 - Self-pop: `popToXx` now reaches the *previous* occurrence of the screen you're on (`resolvePop` skips the current top) instead of no-opping, and it's chainable through a cycle — `popToProfile().popToProfile()` steps back two. Cycle-member pops are now on union navs too so chains keep a handle that still exposes them. (Relative/absolute "by n / at depth n" are just chaining + the `depth` getter — no extra verbs.) Generator no longer emits an unused `_endsWith` helper for trees that don't use `.under`.
