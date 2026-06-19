@@ -1,3 +1,10 @@
+## 0.10.0
+
+- **Breaking: engine erased to `Enum`** so one graph can hold screens from several enums. `NavGraph<S, I>` → `NavGraph<I>`, `PageCtx<S>` → `PageCtx`, `pageOf` is now `(Widget widget, PageCtx ctx, LocalKey key)` (the resolved widget; the screen + id are in `ctx.entry`), and `observe` takes `(Enum from, Enum to)`. The authoring DSL stays typed per family.
+- **`graft` — split a large graph across enums.** `graft(Sub.subtree)` mounts another screen family's subtree into the tree (the one explicit cross-family edge); the runtime splices it into one virtual tree, so the surface is blind to the split.
+- **`keep`/`forget` — live content across tab parks.** `screen.keep({...})` keeps a placement and its subtree mounted when its tab parks (content-swapped, not rebuilt); `forget()` carves a region back out. `NavGraph.forget(keep)` frees a parked keep.
+- **Shared screens via refs.** `SubScreenNode`'s widget is now optional: a null-widget row is a ref that collapses to its same-named owner (exactly one owner per name, no dangling ref), so a screen owned in one enum can be referenced in-family from another for `inherit`/`cycled`.
+
 ## 0.9.1
 
 - Fix: a `.stacked` back-edge now pushes a fresh instance even when the target is an exact duplicate of the current top (e.g. `userProfile(x)` from `userProfile(x)`). The universal p==1 exact-duplicate no-op no longer applies to non-collapsing edges, matching `.stacked`'s "fresh instance every revisit" semantics. Collapsing/`.cycled` and forward edges keep the duplicate guard.

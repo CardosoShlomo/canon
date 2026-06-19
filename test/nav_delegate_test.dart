@@ -10,31 +10,85 @@ enum N with ScreenNode<N> {
 
   static N _profile() => profile({profile.cycled, chat({profile.cycled})});
 
-  static NavGraph<N, _Init> graph() => NavGraph(
+  static NavGraph<_Init> graph() => NavGraph(
         {
           home.keep({_profile()}),
           feed({_profile()}),
         },
         initial: const _Init([(home, null)]),
-        pageOf: (screen, ctx, key) => MaterialPage(
+        pageOf: (widget, ctx, key) => MaterialPage(
           key: key,
           child: ScreenScope(
             entry: ctx.entry,
-            child: Text('${screen.name}:${ctx.entry.id ?? ''}'),
+            child: Text('${ctx.entry.screen.name}:${ctx.entry.id ?? ''}'),
           ),
         ),
       );
 }
 
 // A raw InitialScreenBase for engine tests (the typed surface is generated).
-class _Init implements InitialScreenBase<N> {
+class _Init implements InitialScreenBase {
   const _Init(this.chain);
   @override
-  final List<(N, Object?)> chain;
+  final List<(Enum, Object?)> chain;
+}
+
+// ---- content-swap (keep/forget) fixtures -----------------------------------
+final _inits = <String, int>{};
+final _disposes = <String, int>{};
+
+class _Track extends StatefulWidget {
+  const _Track(this.name);
+  final String name;
+  @override
+  State<_Track> createState() => _TrackState();
+}
+
+class _TrackState extends State<_Track> {
+  @override
+  void initState() {
+    super.initState();
+    _inits.update(widget.name, (n) => n + 1, ifAbsent: () => 1);
+  }
+
+  @override
+  void dispose() {
+    _disposes.update(widget.name, (n) => n + 1, ifAbsent: () => 1);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Text(widget.name);
+}
+
+// home > services > shop.keep — a deep keep; `other` is a separate root.
+enum K with ScreenNode<K> {
+  home, services, shop, other;
+
+  @override
+  Widget get widget => _Track(name);
+
+  static NavGraph<_InitK> graph() => NavGraph(
+        {
+          home({services({shop.keep()})}),
+          other,
+        },
+        initial: const _InitK([(home, null)]),
+        pageOf: (widget, ctx, key) => MaterialPage(
+          key: key,
+          child: ScreenScope(entry: ctx.entry, child: widget),
+        ),
+      );
+}
+
+class _InitK implements InitialScreenBase {
+  const _InitK(this.chain);
+  @override
+  final List<(Enum, Object?)> chain;
 }
 
 void main() {
-  Future<NavGraph<N, _Init>> pump(WidgetTester tester) async {
+  Future<NavGraph<_Init>> pump(WidgetTester tester) async {
     final graph = N.graph();
     await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
     return graph;
@@ -57,14 +111,14 @@ void main() {
   });
 
   testWidgets('initial seeds a multi-entry starting stack', (tester) async {
-    final graph = NavGraph<N, _Init>(
+    final graph = NavGraph<_Init>(
       {N.home.keep({N._profile()}), N.feed()},
       initial: const _Init([(N.home, null), (N.profile, 'p')]),
-      pageOf: (screen, ctx, key) => MaterialPage(
+      pageOf: (widget, ctx, key) => MaterialPage(
         key: key,
         child: ScreenScope(
           entry: ctx.entry,
-          child: Text('${screen.name}:${ctx.entry.id ?? ''}'),
+          child: Text('${ctx.entry.screen.name}:${ctx.entry.id ?? ''}'),
         ),
       ),
     );
@@ -181,18 +235,29 @@ void main() {
     expect(find.text('profile:x'), findsOneWidget);
   });
 
-  testWidgets('reset collapses a parked scope without navigating', (tester) async {
+  testWidgets('forget frees a parked keep without navigating', (tester) async {
     final graph = await pump(tester);
     graph.go(N.profile, 'a');
     await tester.pumpAndSettle();
     graph.go(N.feed);
     await tester.pumpAndSettle();
-    graph.reset(N.home);
+    graph.forget(N.home); // home is a parked keep → collapses to its root
     await tester.pumpAndSettle();
-    expect(find.text('feed:'), findsOneWidget); // still on feed
+    expect(find.text('feed:'), findsOneWidget); // still on feed (no navigation)
     graph.go(N.home);
     await tester.pumpAndSettle();
     expect(graph.stack.length, 1); // home came back fresh
+  });
+
+  testWidgets('forget throws on the active stack and on an unmounted keep',
+      (tester) async {
+    final graph = await pump(tester);
+    // home is the active tab → forgetting it is illegal (not a pop).
+    expect(() => graph.forget(N.home), throwsStateError);
+    // feed has never been visited → its (would-be) keep isn't mounted.
+    graph.go(N.profile, 'a');
+    await tester.pumpAndSettle();
+    expect(() => graph.forget(N.home), throwsStateError); // still active
   });
 
   testWidgets('parked widgets stay alive offstage', (tester) async {
@@ -298,5 +363,33 @@ void main() {
     expect(graph.countOf(N.profile, 'z'), 0); // absent id
     expect(graph.countOf(N.chat), 1);
     expect(graph.countOf(N.feed), 0); // parked tab, not the active stack
+  });
+
+  testWidgets('parked tab keeps the kept subtree alive, frees the prefix',
+      (tester) async {
+    _inits.clear();
+    _disposes.clear();
+    final graph = K.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
+    graph.go(K.shop); // [home, services, shop] — all live while active
+    await tester.pumpAndSettle();
+    expect(_inits['shop'], 1);
+    expect(_disposes['shop'], isNull);
+
+    graph.go(K.other); // park the home tab
+    await tester.pumpAndSettle();
+    // The keep (shop) stays alive; the prefix above it is freed to SizedBox.
+    expect(_disposes['shop'], isNull, reason: 'kept screen survives parking');
+    expect(_inits['shop'], 1, reason: 'kept screen not rebuilt');
+    expect(_disposes['home'], 1, reason: 'non-kept prefix is freed');
+    expect(_disposes['services'], 1, reason: 'non-kept prefix is freed');
+
+    graph.go(K.shop); // back into the home tab
+    await tester.pumpAndSettle();
+    // Prefix rebuilt fresh; shop is the same live instance throughout.
+    expect(_inits['home'], 2, reason: 'prefix rebuilt fresh on return');
+    expect(_inits['services'], 2);
+    expect(_inits['shop'], 1, reason: 'kept screen never rebuilt');
+    expect(_disposes['shop'], isNull);
   });
 }

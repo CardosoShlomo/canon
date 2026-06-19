@@ -7,100 +7,145 @@ import 'screen_node.dart';
 
 /// The spec-enum contract: a screen family carrying the grammar AND a `Widget`.
 /// Binds the engine's abstract widget slot to Flutter's `Widget`, so consumers
-/// write the clean 2-arg form and `Widget get widget` is required.
-///   `enum _Screens with ScreenNode<Object?, _Screens> { ... final Widget widget; }`
+/// write the clean form and `Widget get widget` is required:
+///   `enum _Screens with ScreenNode<_Screens> { ... final Widget widget; }`
 typedef ScreenNode<S extends ScreenNodeBase<S, Widget>> = ScreenNodeBase<S, Widget>;
 
+/// A sub-enum's contract: like [ScreenNode] but the widget is OPTIONAL, so a row
+/// can be a bare ref to an owner screen of the same name (the owner carries the
+/// widget). Sub-enums mix this in; the root keeps [ScreenNode] (widget required),
+/// so the root can never be a ref.
+typedef SubScreenNode<S extends ScreenNodeBase<S, Widget?>>
+    = ScreenNodeBase<S, Widget?>;
+
 /// The page's grammar identity and transition policy inputs.
-final class PageCtx<S extends ScreenNodeBase<S, Object>> {
+final class PageCtx {
   const PageCtx(this.entry, {this.animate = true, this.from});
 
-  final StackEntry<S> entry;
+  final StackEntry entry;
+
   /// False for pages that materialized mid-chain — suppresses their transition.
   final bool animate;
+
   /// Top screen when this page was pushed.
-  final S? from;
+  final Enum? from;
 }
 
-/// Scopes a page's screen and id to its subtree.
-final class ScreenScope<S extends ScreenNodeBase<S, Object>> extends InheritedWidget {
-  const ScreenScope({super.key, required this.entry, required super.child});
+/// Scopes a page's screen and id to its subtree, and gates its content: while
+/// the tab is active everything renders; once parked, only screens that are
+/// kept-when-parked (`keep`/`forget`) keep their real content — the rest
+/// collapse to a `SizedBox` (freed, rebuilt fresh on return). With no liveness
+/// in scope it always renders, so consumers not using it just keep all alive.
+final class ScreenScope extends StatelessWidget {
+  const ScreenScope({super.key, required this.entry, required this.child});
 
-  final StackEntry<S> entry;
+  final StackEntry entry;
+  final Widget child;
 
-  static StackEntry<S> of<S extends ScreenNodeBase<S, Object>>(BuildContext context) {
-    final scope = context.getInheritedWidgetOfExactType<ScreenScope<S>>();
+  static StackEntry of(BuildContext context) {
+    final scope = context.getInheritedWidgetOfExactType<_ScreenEntry>();
     assert(scope != null, 'no ScreenScope above this context');
     return scope!.entry;
   }
 
   @override
-  bool updateShouldNotify(ScreenScope<S> oldWidget) => false;
+  Widget build(BuildContext context) {
+    final live = _ScopeLiveness.of(context);
+    final show = live == null || live.active || live.kept(entry.screen);
+    return _ScreenEntry(
+      entry: entry,
+      child: show ? child : const SizedBox.shrink(),
+    );
+  }
+}
+
+/// Carries the page's grammar entry to descendants (the `of` lookup).
+final class _ScreenEntry extends InheritedWidget {
+  const _ScreenEntry({required this.entry, required super.child});
+
+  final StackEntry entry;
+
+  @override
+  bool updateShouldNotify(_ScreenEntry oldWidget) => false;
+}
+
+/// Per-scope liveness the delegate provides: whether this tab is active, and
+/// which of its screens stay live while parked. A flip of [active] re-gates the
+/// scope's `ScreenScope`s.
+final class _ScopeLiveness extends InheritedWidget {
+  const _ScopeLiveness(
+      {required this.active, required this.kept, required super.child});
+
+  final bool active;
+  final bool Function(Enum) kept;
+
+  static _ScopeLiveness? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_ScopeLiveness>();
+
+  @override
+  bool updateShouldNotify(_ScopeLiveness oldWidget) => active != oldWidget.active;
 }
 
 /// Chain handle: hops queued in one synchronous expression commit together on
 /// a microtask — one diff, one animation.
 @internal
-final class Nav<S extends ScreenNodeBase<S, Object>> {
+final class Nav {
   Nav._(this._graph);
 
-  final NavGraph<S, dynamic> _graph;
+  final NavGraph<dynamic> _graph;
 
-  Nav<S> go<T>(covariant ScreenNodeBase<S, Object> screen, [T? id]) =>
-      _graph.go(screen, id);
+  Nav go<T>(Enum screen, [T? id]) => _graph.go(screen, id);
 
-  Nav<S> pop([S? until]) => _graph.pop(until);
+  Nav pop([Enum? until]) => _graph.pop(until);
 
-  bool maybePop([S? until]) => _graph.maybePop(until);
+  bool maybePop([Enum? until]) => _graph.maybePop(until);
 }
 
-class _Slot<S extends ScreenNodeBase<S, Object>> {
+class _Slot {
   _Slot(this.entry, this.page);
 
-  final StackEntry<S> entry;
+  final StackEntry entry;
   final Page<void> page;
 }
 
 /// One live stack: a root screen's pages plus its Navigator identity.
-class _Scope<S extends ScreenNodeBase<S, Object>> {
-  final List<_Slot<S>> slots = [];
+class _Scope {
+  final List<_Slot> slots = [];
   final GlobalKey<NavigatorState> navKey = GlobalKey<NavigatorState>();
   final HeroController hero = HeroController();
 }
 
 /// The batch's working state: per-scope stacks plus the active scope.
-class _Sim<S extends ScreenNodeBase<S, Object>> {
+class _Sim {
   _Sim(this.stacks, this.active);
 
-  final Map<S, List<StackEntry<S>>> stacks;
-  S active;
+  final Map<Enum, List<StackEntry>> stacks;
+  Enum active;
 
-  List<StackEntry<S>> get stack => stacks[active]!;
+  List<StackEntry> get stack => stacks[active]!;
 }
 
 /// The starting stack, as a pure root..target chain of (screen, id). The
 /// generated `InitialScreen` is the only thing implementing this, so `initial:`
-/// rejects a navigating `Screen.goX` or a live-stack `Screen.on(...)`. Consumers
-/// never assemble the chain by hand — they write `initial: .home.userProfile(id)`.
-abstract interface class InitialScreenBase<S extends ScreenNodeBase<S, Object>> {
-  List<(S, Object?)> get chain;
+/// rejects a navigating `Screen.goX` or a live-stack `Screen.on(...)`.
+abstract interface class InitialScreenBase {
+  List<(Enum, Object?)> get chain;
 }
 
-final class NavGraph<S extends ScreenNodeBase<S, Object>,
-    I extends InitialScreenBase<S>> {
+final class NavGraph<I extends InitialScreenBase> {
   NavGraph(
-    Set<TreeNode<S>> rootScreens, {
+    Set<TreeNode> rootScreens, {
     required this.pageOf,
     required I initial,
     List<NavigatorObserver> Function()? observers,
   })  : _observers = observers ?? (() => []),
-        spec = NavSpec<S>(rootScreens) {
-    delegate = NavDelegate<S>._(this);
+        spec = NavSpec(rootScreens) {
+    delegate = NavDelegate._(this);
     final chain = initial.chain;
     _activeRoot = chain.first.$1;
-    final scope = _Scope<S>();
+    final scope = _Scope();
     var node = spec.canonical[_activeRoot]!;
-    S? from;
+    Enum? from;
     for (var i = 0; i < chain.length; i++) {
       final (screen, id) = chain[i];
       if (i > 0) {
@@ -116,28 +161,30 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>,
     _visited.sort((a, b) => a.index.compareTo(b.index));
   }
 
-  final NavSpec<S> spec;
-  final Page<void> Function(S screen, PageCtx<S> ctx, LocalKey key) pageOf;
+  final NavSpec spec;
+
+  /// Builds a page for a screen's [widget] (already resolved to the owner's
+  /// non-null widget; the screen + id are in `ctx.entry`).
+  final Page<void> Function(Widget widget, PageCtx ctx, LocalKey key) pageOf;
   final List<NavigatorObserver> Function() _observers;
 
-  late final NavDelegate<S> delegate;
+  late final NavDelegate delegate;
 
-  final Map<S, _Scope<S>> _scopes = {};
+  final Map<Enum, _Scope> _scopes = {};
+
   /// Visited roots in spec order — IndexedStack children stay stable.
-  final List<S> _visited = [];
-  late S _activeRoot;
-  _Sim<S>? _sim;
+  final List<Enum> _visited = [];
+  late Enum _activeRoot;
+  _Sim? _sim;
   bool _scheduled = false;
-  late final Nav<S> _nav = Nav._(this);
-  final _navListeners = <void Function(S from, S to)>[];
+  late final Nav _nav = Nav._(this);
+  final _navListeners = <void Function(Enum from, Enum to)>[];
 
-  S get current => _activeScope.slots.last.entry.screen;
+  Enum get current => _activeScope.slots.last.entry.screen;
 
   /// Registers a side-effect listener fired AFTER each navigation commits (the
-  /// new top is settled), BEFORE its transition animates — wire it where your
-  /// state lives. Returns a disposer. Pure observation: it cannot veto or
-  /// reroute (the destination is already chosen at the call site).
-  VoidCallback observe(void Function(S from, S to) fn) {
+  /// new top is settled), BEFORE its transition animates. Returns a disposer.
+  VoidCallback observe(void Function(Enum from, Enum to) fn) {
     _navListeners.add(fn);
     return () => _navListeners.remove(fn);
   }
@@ -146,12 +193,12 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>,
   /// string from source, so a mismatch flags stale codegen.
   String get structureSignature => spec.structureSignature;
 
-  List<StackEntry<S>> get stack =>
+  List<StackEntry> get stack =>
       List.unmodifiable([for (final s in _activeScope.slots) s.entry]);
 
   /// How many entries on the active stack are [screen] (and [id] if given) —
   /// the cycle depth backing `Screen.on(.x.depth(n))`.
-  int countOf(S screen, [Object? id]) {
+  int countOf(Enum screen, [Object? id]) {
     var n = 0;
     for (final s in _activeScope.slots) {
       if (s.entry.screen == screen && (id == null || s.entry.id == id)) n++;
@@ -159,88 +206,83 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>,
     return n;
   }
 
-  /// The live placement path of the active top, root-first — which placement of
-  /// the current screen is active. Reads the simulation mid-chain so generated
-  /// `.placement` narrowing resolves against the just-performed go.
-  List<S> get currentChain {
+  /// The live placement path of the active top, root-first.
+  List<Enum> get currentChain {
     final node =
         (_sim?.stack.last ?? _activeScope.slots.last.entry).node.resolved;
-    final chain = <S>[];
-    for (GrammarNode<S>? n = node; n != null; n = n.parent) {
+    final chain = <Enum>[];
+    for (GrammarNode? n = node; n != null; n = n.parent) {
       chain.insert(0, n.screen);
     }
     return chain;
   }
 
-  _Scope<S> get _activeScope => _scopes[_activeRoot]!;
+  _Scope get _activeScope => _scopes[_activeRoot]!;
 
-  StackEntry<S> _seed(S root, [Object? id]) => StackEntry(spec.canonical[root]!, id);
+  StackEntry _seed(Enum root, [Object? id]) =>
+      StackEntry(spec.canonical[root]!, id);
 
-  _Scope<S> _scopeOf(S root, [Object? id]) => _scopes.putIfAbsent(root, () {
+  _Scope _scopeOf(Enum root, [Object? id]) => _scopes.putIfAbsent(root, () {
         _visited.add(root);
         _visited.sort((a, b) => a.index.compareTo(b.index));
-        return _Scope<S>()..slots.add(_Slot(_seed(root, id), _buildPage(_seed(root, id), animate: false, from: null)));
+        return _Scope()
+          ..slots.add(_Slot(_seed(root, id),
+              _buildPage(_seed(root, id), animate: false, from: null)));
       });
 
-  _Sim<S> _ensureSim() => _sim ??= _Sim(
-        {for (final e in _scopes.entries) e.key: [for (final s in e.value.slots) s.entry]},
+  _Sim _ensureSim() => _sim ??= _Sim(
+        {
+          for (final e in _scopes.entries)
+            e.key: [for (final s in e.value.slots) s.entry]
+        },
         _activeRoot,
       );
 
-  Nav<S> go<T>(ScreenNodeBase<S, Object> screen, [T? id, bool edgeRequired = false]) {
-    assert(id != null || null is T || T == Never, '"${screen.name}" requires an id');
+  Nav go<T>(Enum screen, [T? id, bool edgeRequired = false]) {
+    assert(
+        id != null || null is T || T == Never, '"${screen.name}" requires an id');
     final sim = _ensureSim();
-    final target = screen as S;
-    // A position-anchored verb (a narrowed handle) demands a live edge: a
-    // stale-but-still-legal target resolves, a stale-and-unreachable one throws
-    // rather than silently teleporting via the canonical fallback.
+    final target = screen;
     if (edgeRequired) {
       if (sim.stack.isEmpty || spec.edge(sim.stack.last.node, target) == null) {
-        final from = sim.stack.isEmpty ? 'an empty stack' : sim.stack.last.screen.name;
-        _sim = null; // discard the pending batch — nothing commits
+        final from =
+            sim.stack.isEmpty ? 'an empty stack' : sim.stack.last.screen.name;
+        _sim = null;
         throw StateError(
             'cannot go to "${target.name}" from "$from" — not a reachable edge (stale handle?)');
       }
-      _apply(sim, resolveGo<S>(spec, sim.stack, target, id));
+      _apply(sim, resolveGo(spec, sim.stack, target, id));
       return _nav;
     }
     final root = spec.rootOf(target);
     if (root != sim.active) {
-      // Leaving a non-kept scope resets it; a kept scope parks untouched.
-      if (!spec.keeps.contains(sim.active)) {
+      // Leaving a tab with no keep resets it; a tab with any keep parks.
+      if (!spec.retains(sim.active)) {
         sim.stacks[sim.active] = [_seed(sim.active)];
       }
       sim.active = root;
       final seeded = sim.stacks.putIfAbsent(root, () => [_seed(root, id)]);
-      // An id-bearing root is identified by its id: entering it with a different
-      // id reseeds the scope (this is what makes `go(root, id)` — and an
-      // inherit chain rooted at an id-bearing root — stamp the root id). Id-free
-      // roots pass id == null and resume their parked stack as-is.
       if (id != null && seeded.first.id != id) {
         sim.stacks[root] = [_seed(root, id)];
       }
-      // Switching to the root itself resumes the stack as-is; the ladder
-      // only runs when the hop continues deeper. A repeat go (no switch)
-      // still collapses canonically.
       if (target == root) {
         _schedule();
         return _nav;
       }
     }
-    final res = resolveGo<S>(spec, sim.stack, target, id,
-        onCanonicalFallback: _warnCanonical);
+    final res =
+        resolveGo(spec, sim.stack, target, id, onCanonicalFallback: _warnCanonical);
     _apply(sim, res);
     return _nav;
   }
 
-  /// A guaranteed pop — the caller (a generated guaranteed verb) has proven the
-  /// target is reachable, so failing is a generator/programmer error, asserted
-  /// in debug. Chainable.
-  Nav<S> pop([S? until]) {
+  /// A guaranteed pop — the caller has proven the target is reachable, so failing
+  /// is a generator/programmer error, asserted in debug. Chainable.
+  Nav pop([Enum? until]) {
     final sim = _ensureSim();
-    final res = resolvePop<S>(sim.stack, until);
+    final res = resolvePop(sim.stack, until);
     if (res == null) {
-      _sim = null; // discard the pending batch — nothing commits
+      _sim = null;
       throw StateError(
           'pop(${until?.name ?? ''}) is impossible from ${sim.stack.map((e) => e.screen.name)} — use maybePop for unprovable pops');
     }
@@ -248,26 +290,40 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>,
     return _nav;
   }
 
-  /// An unprovable pop: pops to [until] (or one level) if possible, else does
-  /// nothing. Returns whether it popped. The bool replaces a pop exception.
-  bool maybePop([S? until]) {
+  /// An unprovable pop: pops to [until] (or one level) if possible, else nothing.
+  bool maybePop([Enum? until]) {
     final sim = _ensureSim();
-    final res = resolvePop<S>(sim.stack, until);
+    final res = resolvePop(sim.stack, until);
     if (res == null) return false;
     _apply(sim, res);
     return true;
   }
 
-  /// Collapses [screen]'s scope to its bare root without navigating — parked
-  /// or active. Scope maintenance, deliberately not chainable.
-  void reset(S screen) {
+  /// Frees a parked [keep]: cuts the keep and everything above it from its tab's
+  /// stack, leaving the legal prefix below (or the bare root). Throws if the keep
+  /// isn't mounted, or if it's in the currently active stack — forget is
+  /// parked-only scope maintenance, not a pop. Not chainable.
+  void forget(Enum keep) {
+    assert(spec.keeps.contains(keep), '"${keep.name}" is not a keep');
     final sim = _ensureSim();
-    final root = spec.rootOf(screen);
-    sim.stacks[root] = [_seed(root)];
+    final root = spec.rootOf(keep);
+    if (root == sim.active) {
+      _sim = null;
+      throw StateError(
+          'cannot forget "${keep.name}" — it is in the currently active stack');
+    }
+    final stack = sim.stacks[root];
+    final idx = stack == null ? -1 : stack.indexWhere((e) => e.screen == keep);
+    if (idx < 0) {
+      _sim = null;
+      throw StateError('cannot forget "${keep.name}" — it is not mounted');
+    }
+    final cut = stack!.sublist(0, idx);
+    sim.stacks[root] = cut.isEmpty ? [_seed(root)] : cut;
     _schedule();
   }
 
-  void _apply(_Sim<S> sim, NavResolution<S> res) {
+  void _apply(_Sim sim, NavResolution res) {
     final stack = sim.stack;
     stack.removeRange(stack.length - res.popCount, stack.length);
     stack.addAll(res.pushes);
@@ -320,11 +376,12 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>,
     delegate._refresh();
   }
 
-  Page<void> _buildPage(StackEntry<S> entry, {required bool animate, required S? from}) {
+  Page<void> _buildPage(StackEntry entry,
+      {required bool animate, required Enum? from}) {
     final screen = entry.screen;
     return pageOf(
-      screen,
-      PageCtx<S>(entry, animate: animate, from: from),
+      (screen as WidgetScreen).widget as Widget,
+      PageCtx(entry, animate: animate, from: from),
       spec.isMulti(screen) ? UniqueKey() : ValueKey(screen.name),
     );
   }
@@ -344,11 +401,11 @@ final class NavGraph<S extends ScreenNodeBase<S, Object>,
   }
 }
 
-final class NavDelegate<S extends ScreenNodeBase<S, Object>> extends RouterDelegate<Object>
+final class NavDelegate extends RouterDelegate<Object>
     with ChangeNotifier, PopNavigatorRouterDelegateMixin<Object> {
   NavDelegate._(this._graph);
 
-  final NavGraph<S, dynamic> _graph;
+  final NavGraph<dynamic> _graph;
 
   @override
   GlobalKey<NavigatorState> get navigatorKey => _graph._activeScope.navKey;
@@ -360,15 +417,19 @@ final class NavDelegate<S extends ScreenNodeBase<S, Object>> extends RouterDeleg
       index: visited.indexOf(_graph._activeRoot),
       children: [
         for (final root in visited)
-          TickerMode(
-            enabled: root == _graph._activeRoot,
-            child: HeroControllerScope(
-              controller: _graph._scopes[root]!.hero,
-              child: Navigator(
-                key: _graph._scopes[root]!.navKey,
-                observers: _graph._observers(),
-                pages: [for (final s in _graph._scopes[root]!.slots) s.page],
-                onDidRemovePage: _graph._onPageRemoved,
+          _ScopeLiveness(
+            active: root == _graph._activeRoot,
+            kept: _graph.spec.keptWhenParked,
+            child: TickerMode(
+              enabled: root == _graph._activeRoot,
+              child: HeroControllerScope(
+                controller: _graph._scopes[root]!.hero,
+                child: Navigator(
+                  key: _graph._scopes[root]!.navKey,
+                  observers: _graph._observers(),
+                  pages: [for (final s in _graph._scopes[root]!.slots) s.page],
+                  onDidRemovePage: _graph._onPageRemoved,
+                ),
               ),
             ),
           ),

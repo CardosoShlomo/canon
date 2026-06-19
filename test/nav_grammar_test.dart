@@ -15,15 +15,60 @@ enum S with ScreenNodeBase<S, Object> {
         chat({profile.cycled}),
       });
 
-  static NavSpec<S> spec() => NavSpec({
+  static NavSpec spec() => NavSpec({
         home({_userProfile()}),
         feed({_userProfile()}),
         settings({language}),
       });
 }
 
-extension on NavSpec<S> {
-  StackEntry<S> entry(S screen, [Object? id]) =>
+// A separate screen family, mounted into S's tree via `graft`.
+enum Sub with ScreenNodeBase<Sub, Object> {
+  shop, catalog;
+
+  @override
+  Object get widget => name;
+
+  static Sub tree() => shop({catalog});
+}
+
+// Shared-screen model: `profile` is OWNED by Own (carries a widget); Ref
+// re-declares `profile` as a bare REF (null widget) so it can be reused
+// in-family, and canonicalization collapses the ref to the owner.
+enum Own with ScreenNodeBase<Own, Object?> {
+  home,
+  profile;
+
+  @override
+  Object? get widget => name; // both owners
+}
+
+enum Ref with ScreenNodeBase<Ref, Object?> {
+  shop,
+  profile;
+
+  @override
+  Object? get widget => this == profile ? null : name; // profile is a ref
+
+  static Ref tree() => shop({profile});
+}
+
+enum TwoOwners with ScreenNodeBase<TwoOwners, Object?> {
+  profile; // a SECOND owner of `profile` — also carries a widget
+
+  @override
+  Object? get widget => name;
+}
+
+enum Dangling with ScreenNodeBase<Dangling, Object?> {
+  ghost; // a ref (null widget) with no owner anywhere
+
+  @override
+  Object? get widget => null;
+}
+
+extension on NavSpec {
+  StackEntry entry(Enum screen, [Object? id]) =>
       StackEntry(canonical[screen]!, id);
 }
 
@@ -48,17 +93,36 @@ void main() {
     });
 
     test('again with no ancestor throws at build', () {
-      expect(() => NavSpec<S>({S.home({S.friends.cycled})}),
+      expect(() => NavSpec({S.home({S.friends.cycled})}),
           throwsStateError);
     });
 
-    test('keep below the root throws at build', () {
-      expect(() => NavSpec<S>({S.home({S.profile.keep()})}),
+    test('keep/forget set per-screen liveness when parked', () {
+      final s = NavSpec({
+        S.home({S.profile.keep({S.friends, S.chat.forget()})})
+      });
+      expect(s.keeps, contains(S.profile));
+      expect(s.forgets, contains(S.chat));
+      expect(s.retains(S.home), isTrue); // tab has a keep → retained when parked
+      expect(s.keptWhenParked(S.home), isFalse); // above the keep → freed
+      expect(s.keptWhenParked(S.profile), isTrue); // the keep itself → live
+      expect(s.keptWhenParked(S.friends), isTrue); // under the keep → live
+      expect(s.keptWhenParked(S.chat), isFalse); // forget carves it back out
+    });
+
+    test('redundant keep/forget is a build error', () {
+      // keep under keep with no forget between
+      expect(() => NavSpec({S.home.keep({S.profile.keep()})}), throwsStateError);
+      // forget with no keep above it
+      expect(() => NavSpec({S.home({S.profile.forget()})}), throwsStateError);
+      // forget under forget with no keep between
+      expect(
+          () => NavSpec({S.home.keep({S.profile.forget({S.friends.forget()})})}),
           throwsStateError);
     });
 
     test('a failed build never poisons the next construction', () {
-      expect(() => NavSpec<S>({S.home({S.friends.cycled})}),
+      expect(() => NavSpec({S.home({S.friends.cycled})}),
           throwsStateError);
       final s = S.spec();
       expect(s.canonical[S.home]!.children.map((n) => n.screen), [S.profile]);
@@ -74,21 +138,70 @@ void main() {
     });
   });
 
+  group('graft (cross-enum subtree)', () {
+    test('splices a foreign subtree into the native tree as one graph', () {
+      final s = NavSpec({
+        S.home({graft(Sub.tree())})
+      });
+      // The grafted screens live under the native parent, in one unified spec.
+      expect(s.canonical[Sub.shop]!.parent!.screen, S.home);
+      expect(s.canonical[Sub.catalog]!.parent!.screen, Sub.shop);
+      expect(s.rootOf(Sub.catalog), S.home);
+    });
+
+    test('navigates across the graft edge', () {
+      final s = NavSpec({
+        S.home({graft(Sub.tree())})
+      });
+      // home -> shop (a cross-enum edge) -> catalog
+      final r = resolveGo(s, [s.entry(S.home)], Sub.shop, null);
+      expect(r.pushes.single.screen, Sub.shop);
+      final r2 = resolveGo(
+          s, [s.entry(S.home), s.entry(Sub.shop)], Sub.catalog, null);
+      expect(r2.pushes.single.screen, Sub.catalog);
+    });
+  });
+
+  group('shared screens (refs collapse to the owner)', () {
+    test('a ref is rewritten to its same-named owner', () {
+      final s = NavSpec({
+        Own.home({Own.profile, graft(Ref.tree())})
+      });
+      expect(s.canonical.containsKey(Ref.profile), isFalse); // ref erased
+      // the ref placement under shop now points at the owner value
+      expect(s.canonical[Ref.shop]!.children.single.screen, Own.profile);
+      // placed under home AND (via the ref) under shop → multi
+      expect(s.isMulti(Own.profile), isTrue);
+    });
+
+    test('two owners of one name is a build error', () {
+      expect(
+          () => NavSpec({
+                Own.home({Own.profile, graft(TwoOwners.profile)})
+              }),
+          throwsStateError);
+    });
+
+    test('a ref with no owner is a build error', () {
+      expect(() => NavSpec({Dangling.ghost()}), throwsStateError);
+    });
+  });
+
   group('structure signature', () {
     test('is sibling-order independent', () {
-      final a = NavSpec<S>({S.home({S.settings, S.language})}).structureSignature;
-      final b = NavSpec<S>({S.home({S.language, S.settings})}).structureSignature;
+      final a = NavSpec({S.home({S.settings, S.language})}).structureSignature;
+      final b = NavSpec({S.home({S.language, S.settings})}).structureSignature;
       expect(a, b);
     });
 
     test('re-parenting changes the signature', () {
-      final a = NavSpec<S>({S.home({S.language}), S.settings()}).structureSignature;
-      final b = NavSpec<S>({S.home(), S.settings({S.language})}).structureSignature;
+      final a = NavSpec({S.home({S.language}), S.settings()}).structureSignature;
+      final b = NavSpec({S.home(), S.settings({S.language})}).structureSignature;
       expect(a, isNot(b));
     });
 
     test('reflects keep and again flags', () {
-      expect(NavSpec<S>({S.home.keep({S.language})}).structureSignature,
+      expect(NavSpec({S.home.keep({S.language})}).structureSignature,
           contains('homeK('));
       expect(S.spec().structureSignature, contains('profileA'));
     });
@@ -219,9 +332,9 @@ void main() {
 
   group('stacked back-edge', () {
     test('cycled folds a completed cycle; stacked pushes a fresh instance', () {
-      final cycled = NavSpec<S>({S.profile({S.chat({S.profile.cycled})})});
-      final stacked = NavSpec<S>({S.profile({S.chat({S.profile.stacked})})});
-      List<StackEntry<S>> stk(NavSpec<S> s) => [
+      final cycled = NavSpec({S.profile({S.chat({S.profile.cycled})})});
+      final stacked = NavSpec({S.profile({S.chat({S.profile.stacked})})});
+      List<StackEntry> stk(NavSpec s) => [
             s.entry(S.profile, 'a'),
             s.entry(S.chat, ('x', 'a')),
             s.entry(S.profile, 'a'),
@@ -237,7 +350,7 @@ void main() {
     });
 
     test('stacked pushes a fresh instance even for an exact duplicate of the top', () {
-      final stacked = NavSpec<S>({S.profile({S.profile.stacked})});
+      final stacked = NavSpec({S.profile({S.profile.stacked})});
       final r = resolveGo(stacked, [stacked.entry(S.profile, 'a')], S.profile, 'a');
       expect(r.popCount, 0);
       expect(r.pushes.length, 1);
