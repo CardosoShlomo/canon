@@ -9,6 +9,7 @@
 /// grafted from several families.
 library;
 
+import 'package:canon_codec/canon_codec.dart';
 import 'package:meta/meta.dart';
 
 /// The host-facing face of a screen: its widget. The engine stays Flutter-free —
@@ -102,6 +103,11 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   /// the engine stays Flutter-free by keeping it an abstract type parameter.
   @override
   W get widget;
+
+  /// This screen's id codec, or null when id-free. Declared as a field on the
+  /// consumer enum (`final Codec? id;`); the engine reads it to round-trip ids
+  /// for restoration — no codegen. The default keeps id-free enums field-free.
+  Codec<Object?>? get id => null;
 
   S get _self => this as S;
 

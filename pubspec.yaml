@@ -1,6 +1,6 @@
 name: canon
 description: "Compile-safe Flutter navigation from a single grammar tree."
-version: 0.10.0
+version: 0.11.0
 repository: https://github.com/CardosoShlomo/canon
 
 environment:
@@ -8,6 +8,7 @@ environment:
   flutter: ">=1.17.0"
 
 dependencies:
+  canon_codec: ^0.1.0
   flutter:
     sdk: flutter
   meta: ^1.18.0

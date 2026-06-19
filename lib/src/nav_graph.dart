@@ -168,6 +168,12 @@ final class NavGraph<I extends InitialScreenBase> {
   final Page<void> Function(Widget widget, PageCtx ctx, LocalKey key) pageOf;
   final List<NavigatorObserver> Function() _observers;
 
+  /// Screen-name → screen, for restore. Names are unique (refs collapse to one
+  /// owner), so this is total over the live tree.
+  late final Map<String, Enum> _byName = {
+    for (final s in spec.screens) s.name: s,
+  };
+
   late final NavDelegate delegate;
 
   final Map<Enum, _Scope> _scopes = {};
@@ -192,6 +198,85 @@ final class NavGraph<I extends InitialScreenBase> {
   /// Canonical encoding of the live tree's shape — the generator emits the same
   /// string from source, so a mismatch flags stale codegen.
   String get structureSignature => spec.structureSignature;
+
+  /// The full multi-scope nav state as a restoration-serializable tree (only
+  /// primitives/Lists/Maps), keyed by screen NAME with each id encoded via the
+  /// screen's own codec (`ScreenNodeBase.id`). Pairs with [restore].
+  Map<String, Object?> toState() => {
+        'v': structureSignature, // stale-graph guard: reject restore on mismatch
+        'active': _activeRoot.name,
+        'scopes': {
+          for (final e in _scopes.entries)
+            e.key.name: [
+              for (final s in e.value.slots)
+                [
+                  s.entry.screen.name,
+                  (s.entry.screen as ScreenNodeBase).id?.encode(s.entry.id),
+                ],
+            ],
+        },
+      };
+
+  /// Rebuilds every scope from a [toState] snapshot, best-effort: replays legal
+  /// edges and decodes each id via the screen's codec. ANY failure mid-stack —
+  /// illegal edge, unknown screen, or a token the codec rejects — TRUNCATES the
+  /// stack there (the failed screen and everything above it, its descendants,
+  /// are dropped), keeping the valid prefix below. Returns false (no mutation)
+  /// on a stale-graph snapshot or when nothing is restorable.
+  bool restore(Map<String, Object?> state) {
+    if (state['v'] != structureSignature) return false;
+    final scopes = state['scopes'];
+    if (scopes is! Map) return false;
+    final built = <Enum, _Scope>{};
+    for (final entry in scopes.entries) {
+      final root = _byName[entry.key];
+      final rows = entry.value;
+      if (root == null || !spec.canonical.containsKey(root) || rows is! List) {
+        continue;
+      }
+      final scope = _Scope();
+      var node = spec.canonical[root]!;
+      Enum? from;
+      for (var i = 0; i < rows.length; i++) {
+        final row = rows[i];
+        if (row is! List || row.isEmpty) break;
+        final screen = _byName[row[0]];
+        if (screen == null) break; // unknown screen → truncate
+        if (i > 0) {
+          final next = spec.edge(node, screen);
+          if (next == null) break; // illegal edge → truncate
+          node = next;
+        }
+        final codec = (screen as ScreenNodeBase).id;
+        Object? id;
+        if (codec != null) {
+          final token = row.length > 1 ? row[1] : null;
+          // id-bearing screen with a missing or codec-rejected token: drop it
+          // AND everything above (its descendants can't outlive it).
+          if (token is! String) break;
+          id = codec.decode(token);
+          if (id == null) break;
+        }
+        final se = StackEntry(node, id);
+        scope.slots.add(_Slot(se, _buildPage(se, animate: false, from: from)));
+        from = screen;
+      }
+      if (scope.slots.isNotEmpty) built[root] = scope;
+    }
+    if (built.isEmpty) return false; // nothing restorable → keep current state
+    _scopes
+      ..clear()
+      ..addAll(built);
+    _visited
+      ..clear()
+      ..addAll(built.keys)
+      ..sort((a, b) => a.index.compareTo(b.index));
+    final active = _byName[state['active']];
+    _activeRoot =
+        (active != null && built.containsKey(active)) ? active : built.keys.first;
+    delegate._refresh();
+    return true;
+  }
 
   List<StackEntry> get stack =>
       List.unmodifiable([for (final s in _activeScope.slots) s.entry]);

@@ -8,6 +8,12 @@ enum N with ScreenNode<N> {
   @override
   Widget get widget => Text(name);
 
+  // profile/chat carry a string id codec → their ids round-trip on restore;
+  // home/feed are id-free (default null codec).
+  @override
+  Codec<Object?>? get id =>
+      (this == profile || this == chat) ? Codec.string : null;
+
   static N _profile() => profile({profile.cycled, chat({profile.cycled})});
 
   static NavGraph<_Init> graph() => NavGraph(
@@ -391,5 +397,90 @@ void main() {
     expect(_inits['services'], 2);
     expect(_inits['shop'], 1, reason: 'kept screen never rebuilt');
     expect(_disposes['shop'], isNull);
+  });
+
+  testWidgets('restoration round-trips every scope (active + parked) with ids',
+      (tester) async {
+    final g1 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g1.delegate));
+    g1.go(N.profile, 'p'); // home -> profile:p
+    await tester.pumpAndSettle();
+    g1.go(N.feed); // switch scopes; home parks (it is a keep) holding profile:p
+    await tester.pumpAndSettle();
+
+    final snap = g1.toState();
+    expect(snap['active'], 'feed');
+
+    // Fresh graph (simulates process death) restores from the snapshot.
+    final g2 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g2.delegate));
+    expect(g2.restore(snap), isTrue);
+    await tester.pumpAndSettle();
+
+    // Active scope restored.
+    expect(g2.current, N.feed);
+    expect(g2.stack.map((e) => '${e.screen.name}:${e.id}').toList(),
+        ['feed:null']);
+
+    // The parked home scope restored too, with its decoded id.
+    g2.go(N.home);
+    await tester.pumpAndSettle();
+    expect(g2.stack.map((e) => '${e.screen.name}:${e.id}').toList(),
+        ['home:null', 'profile:p']);
+  });
+
+  testWidgets('restore truncates above a screen whose codec rejects its token',
+      (tester) async {
+    final g1 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g1.delegate));
+    g1.go(N.profile, 'p'); // home -> profile:p
+    await tester.pumpAndSettle();
+    g1.go(N.chat, 'c'); // -> chat:c  (chat is profile's child)
+    await tester.pumpAndSettle();
+    final snap = g1.toState();
+    // Corrupt chat's id token: '' is rejected by Codec.string.
+    ((snap['scopes'] as Map)['home'] as List)[2][1] = '';
+
+    final g2 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g2.delegate));
+    expect(g2.restore(snap), isTrue);
+    await tester.pumpAndSettle();
+    // chat dropped (codec rejected its token); the prefix below survives.
+    expect(g2.stack.map((e) => '${e.screen.name}:${e.id}').toList(),
+        ['home:null', 'profile:p']);
+  });
+
+  testWidgets('restore is best-effort — truncates at an illegal entry',
+      (tester) async {
+    final g1 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g1.delegate));
+    g1.go(N.profile, 'p');
+    await tester.pumpAndSettle();
+    final snap = g1.toState();
+    // Corrupt the active scope: append an entry that is NOT a legal edge from
+    // profile (feed is a root, not profile's child).
+    (snap['scopes'] as Map)['home'] = [
+      ['home', null],
+      ['profile', 'p'],
+      ['feed', null], // illegal here
+    ];
+
+    final g2 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g2.delegate));
+    expect(g2.restore(snap), isTrue);
+    await tester.pumpAndSettle();
+    // Truncated to the legal prefix; the illegal tail is dropped, no throw.
+    expect(g2.stack.map((e) => '${e.screen.name}:${e.id}').toList(),
+        ['home:null', 'profile:p']);
+  });
+
+  testWidgets('restore rejects a snapshot from a changed graph', (tester) async {
+    final g1 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g1.delegate));
+    final snap = g1.toState();
+    snap['v'] = 'stale-signature';
+    final g2 = N.graph();
+    await tester.pumpWidget(MaterialApp.router(routerDelegate: g2.delegate));
+    expect(g2.restore(snap), isFalse);
   });
 }

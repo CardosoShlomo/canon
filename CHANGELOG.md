@@ -1,3 +1,9 @@
+## 0.11.0
+
+- **Built-in state restoration.** `NavGraph.toState()` snapshots the full multi-scope stack (restoration-serializable) and `restore(state)` rebuilds it — best-effort: any mid-stack failure (illegal edge, unknown screen, or a token its codec rejects) truncates there, dropping that screen and everything above it, keeping the valid prefix. A stale-graph snapshot is rejected outright. No codegen, no wiring.
+- **Id codecs on the screen.** `ScreenNodeBase` exposes `Codec? get id` (default null); declare `final Codec? id;` on the enum and the engine round-trips ids for restoration by reading the codec directly.
+- **Re-exports `Codec`** from the new `canon_codec` package, so `package:canon/canon.dart` is the only import needed for the nav DSL *and* id codecs.
+
 ## 0.10.0
 
 - **Breaking: engine erased to `Enum`** so one graph can hold screens from several enums. `NavGraph<S, I>` → `NavGraph<I>`, `PageCtx<S>` → `PageCtx`, `pageOf` is now `(Widget widget, PageCtx ctx, LocalKey key)` (the resolved widget; the screen + id are in `ctx.entry`), and `observe` takes `(Enum from, Enum to)`. The authoring DSL stays typed per family.
