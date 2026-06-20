@@ -6,7 +6,7 @@ enum N with ScreenNode<N> {
   home, feed, profile, chat;
 
   @override
-  Widget get widget => Text(name);
+  Widget get widget => _Label(this);
 
   // profile/chat carry a string id codec → their ids round-trip on restore;
   // home/feed are id-free (default null codec).
@@ -22,14 +22,19 @@ enum N with ScreenNode<N> {
           feed({_profile()}),
         },
         initial: const _Init([(home, null)]),
-        pageOf: (widget, ctx, key) => MaterialPage(
-          key: key,
-          child: ScreenScope(
-            entry: ctx.entry,
-            child: Text('${ctx.entry.screen.name}:${ctx.entry.id ?? ''}'),
-          ),
-        ),
+        pageOf: (widget, ctx, key) => MaterialPage(key: key, child: widget),
       );
+}
+
+// Renders `name:id` — reads its own runtime id via the in-package idOf primitive.
+class _Label extends StatelessWidget {
+  const _Label(this.screen);
+  final N screen;
+  @override
+  Widget build(BuildContext context) {
+    final id = ScreenScope.idOf<Object?>(context, screen);
+    return Text('${screen.name}:${id ?? ''}');
+  }
 }
 
 // A raw InitialScreenBase for engine tests (the typed surface is generated).
@@ -80,10 +85,7 @@ enum K with ScreenNode<K> {
           other,
         },
         initial: const _InitK([(home, null)]),
-        pageOf: (widget, ctx, key) => MaterialPage(
-          key: key,
-          child: ScreenScope(entry: ctx.entry, child: widget),
-        ),
+        pageOf: (widget, ctx, key) => MaterialPage(key: key, child: widget),
       );
 }
 
@@ -120,13 +122,7 @@ void main() {
     final graph = NavGraph<_Init>(
       {N.home.keep({N._profile()}), N.feed()},
       initial: const _Init([(N.home, null), (N.profile, 'p')]),
-      pageOf: (widget, ctx, key) => MaterialPage(
-        key: key,
-        child: ScreenScope(
-          entry: ctx.entry,
-          child: Text('${ctx.entry.screen.name}:${ctx.entry.id ?? ''}'),
-        ),
-      ),
+      pageOf: (widget, ctx, key) => MaterialPage(key: key, child: widget),
     );
     await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
     await tester.pumpAndSettle();

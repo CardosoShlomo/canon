@@ -1,3 +1,9 @@
+## 0.12.0
+
+- **Breaking: ids are read only through the typed `context.idOf(...)`.** `ScreenScope` is now `@internal` and canon wraps every page in it itself, so `pageOf` no longer wraps it and `PageCtx.entry` is gone (use `PageCtx.screen`). The raw `Object? id` is never exposed to screen code; the generated `context.idOf(ScreenId.x)` (id-bearing screens only) is the single sanctioned, non-null reader.
+- `ScreenScope.of(context)` now returns the screen `Enum`; `ScreenScope.idOf<T>(context, spec)` is the internal typed seam the generated extension delegates to.
+- Pairs with canon_generator ^0.15.0 (emits `ScreenId<I>` + the delegating extension).
+
 ## 0.11.0
 
 - **Built-in state restoration.** `NavGraph.toState()` snapshots the full multi-scope stack (restoration-serializable) and `restore(state)` rebuilds it — best-effort: any mid-stack failure (illegal edge, unknown screen, or a token its codec rejects) truncates there, dropping that screen and everything above it, keeping the valid prefix. A stale-graph snapshot is rejected outright. No codegen, no wiring.

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:meta/meta.dart';
 
 import 'screen_node.dart';
 
@@ -20,9 +21,11 @@ typedef SubScreenNode<S extends ScreenNodeBase<S, Widget?>>
 
 /// The page's grammar identity and transition policy inputs.
 final class PageCtx {
-  const PageCtx(this.entry, {this.animate = true, this.from});
+  const PageCtx(this.screen, {this.animate = true, this.from});
 
-  final StackEntry entry;
+  /// The screen this page renders. Ids are read inside the screen via the
+  /// generated `context.idOf(...)`, not here — pageOf never sees a raw id.
+  final Enum screen;
 
   /// False for pages that materialized mid-chain — suppresses their transition.
   final bool animate;
@@ -36,16 +39,33 @@ final class PageCtx {
 /// kept-when-parked (`keep`/`forget`) keep their real content — the rest
 /// collapse to a `SizedBox` (freed, rebuilt fresh on return). With no liveness
 /// in scope it always renders, so consumers not using it just keep all alive.
+/// Internal: canon wraps each page in this (see `_buildPage`). Consumers never
+/// construct it — they read their screen via the generated `context.idOf`/
+/// `context.screen`, which route through the statics here.
+@internal
 final class ScreenScope extends StatelessWidget {
   const ScreenScope({super.key, required this.entry, required this.child});
 
   final StackEntry entry;
   final Widget child;
 
-  static StackEntry of(BuildContext context) {
+  /// The screen this context is under. Carries no id — read ids only via the
+  /// typed [idOf], so a raw `Object?` id is never exposed to screen code.
+  static Enum of(BuildContext context) => _entryOf(context).screen;
+
+  static StackEntry _entryOf(BuildContext context) {
     final scope = context.getInheritedWidgetOfExactType<_ScreenEntry>();
     assert(scope != null, 'no ScreenScope above this context');
     return scope!.entry;
+  }
+
+  /// The typed id of screen [spec] this context is under. The single sanctioned
+  /// id read; an id-bearing screen always has its id, so [T] is non-null.
+  static T idOf<T>(BuildContext context, Enum spec) {
+    final entry = _entryOf(context);
+    assert(identical(entry.screen, spec),
+        'idOf(${spec.name}) read under ${entry.screen.name}');
+    return entry.id as T;
   }
 
   @override
@@ -464,9 +484,12 @@ final class NavGraph<I extends InitialScreenBase> {
   Page<void> _buildPage(StackEntry entry,
       {required bool animate, required Enum? from}) {
     final screen = entry.screen;
+    // canon owns the ScreenScope wrap, so the raw entry/id never reaches pageOf.
+    final content =
+        ScreenScope(entry: entry, child: (screen as WidgetScreen).widget as Widget);
     return pageOf(
-      (screen as WidgetScreen).widget as Widget,
-      PageCtx(entry, animate: animate, from: from),
+      content,
+      PageCtx(screen, animate: animate, from: from),
       spec.isMulti(screen) ? UniqueKey() : ValueKey(screen.name),
     );
   }
