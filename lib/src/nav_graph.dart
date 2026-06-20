@@ -2,10 +2,18 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show MaterialPage;
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart';
 
 import 'screen_node.dart';
+
+/// Default page when the consumer gives no `pageOf`: a platform Material page.
+Page<void> _defaultPageOf(Widget widget, PageCtx ctx, LocalKey key) =>
+    MaterialPage<void>(key: key, child: widget);
+
+/// Default when the consumer gives no `observers`.
+List<NavigatorObserver> _noObservers() => const [];
 
 /// The spec-enum contract: a screen family carrying the grammar AND a `Widget`.
 /// Binds the engine's abstract widget slot to Flutter's `Widget`, so consumers
@@ -118,8 +126,6 @@ final class Nav {
   Nav go<T>(Enum screen, [T? id]) => _graph.go(screen, id);
 
   Nav pop([Enum? until]) => _graph.pop(until);
-
-  bool maybePop([Enum? until]) => _graph.maybePop(until);
 }
 
 class _Slot {
@@ -156,11 +162,10 @@ abstract interface class InitialScreenBase {
 final class NavGraph<I extends InitialScreenBase> {
   NavGraph(
     Set<TreeNode> rootScreens, {
-    required this.pageOf,
+    this.pageOf = _defaultPageOf,
     required I initial,
-    List<NavigatorObserver> Function()? observers,
-  })  : _observers = observers ?? (() => []),
-        spec = NavSpec(rootScreens) {
+    this._observers = _noObservers,
+  }) : spec = NavSpec(rootScreens) {
     delegate = NavDelegate._(this);
     final chain = initial.chain;
     _activeRoot = chain.first.$1;
@@ -351,6 +356,7 @@ final class NavGraph<I extends InitialScreenBase> {
         _activeRoot,
       );
 
+  @internal
   Nav go<T>(Enum screen, [T? id, bool edgeRequired = false]) {
     assert(
         id != null || null is T || T == Never, '"${screen.name}" requires an id');
@@ -391,31 +397,24 @@ final class NavGraph<I extends InitialScreenBase> {
 
   /// A guaranteed pop — the caller has proven the target is reachable, so failing
   /// is a generator/programmer error, asserted in debug. Chainable.
+  @internal
   Nav pop([Enum? until]) {
     final sim = _ensureSim();
     final res = resolvePop(sim.stack, until);
     if (res == null) {
       _sim = null;
       throw StateError(
-          'pop(${until?.name ?? ''}) is impossible from ${sim.stack.map((e) => e.screen.name)} — use maybePop for unprovable pops');
+          'pop(${until?.name ?? ''}) is impossible from ${sim.stack.map((e) => e.screen.name)} — guard unprovable pops with Screen.canPop');
     }
     _apply(sim, res);
     return _nav;
-  }
-
-  /// An unprovable pop: pops to [until] (or one level) if possible, else nothing.
-  bool maybePop([Enum? until]) {
-    final sim = _ensureSim();
-    final res = resolvePop(sim.stack, until);
-    if (res == null) return false;
-    _apply(sim, res);
-    return true;
   }
 
   /// Frees a parked [keep]: cuts the keep and everything above it from its tab's
   /// stack, leaving the legal prefix below (or the bare root). Throws if the keep
   /// isn't mounted, or if it's in the currently active stack — forget is
   /// parked-only scope maintenance, not a pop. Not chainable.
+  @internal
   void forget(Enum keep) {
     assert(spec.keeps.contains(keep), '"${keep.name}" is not a keep');
     final sim = _ensureSim();

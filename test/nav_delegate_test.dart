@@ -295,29 +295,6 @@ void main() {
     expect(find.text('profile:a', skipOffstage: false), findsOneWidget);
   });
 
-  testWidgets('maybePop returns false when the target is not in the stack', (tester) async {
-    final graph = await pump(tester);
-    graph.go(N.profile, 'a');
-    await tester.pumpAndSettle();
-    expect(graph.maybePop(N.chat), isFalse); // chat absent — no-op
-    await tester.pumpAndSettle();
-    expect(graph.stack.length, 2); // unchanged
-  });
-
-  testWidgets('maybePop returns false when a bare pop hits the root', (tester) async {
-    final graph = await pump(tester);
-    expect(graph.maybePop(), isFalse); // only [home] — nothing to pop
-  });
-
-  testWidgets('maybePop returns true and pops when the target is present', (tester) async {
-    final graph = await pump(tester);
-    graph.go(N.profile, 'a').go(N.chat, 'c');
-    await tester.pumpAndSettle();
-    expect(graph.maybePop(N.profile), isTrue);
-    await tester.pumpAndSettle();
-    expect(graph.current, N.profile);
-  });
-
   testWidgets('NavStack views work (Screen.stack building block)', (tester) async {
     final graph = await pump(tester);
     graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b');

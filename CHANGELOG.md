@@ -1,3 +1,8 @@
+## 0.15.0
+
+- `pageOf` and `observers` are now optional (`pageOf` defaults to `MaterialPage`).
+- Removed the unused `maybePop`; engine `go`/`pop`/`forget` are now `@internal` — navigate via the generated typed verbs.
+
 ## 0.14.0
 
 - `Screen.manager()` restoration is now always on by default (`restorationId` defaults to `'nav'`); pass it only to override the storage key. Drop-in: existing `manager()` calls keep working, `manager()` with no args now restores.
