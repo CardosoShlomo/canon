@@ -107,6 +107,30 @@ void main() {
     expect(find.text('home:'), findsOneWidget);
   });
 
+  testWidgets('Screen.manager() mounts in MaterialApp.home; navigate + back',
+      (tester) async {
+    final graph = N.graph();
+    await tester.pumpWidget(MaterialApp(home: graph.manager()));
+    expect(find.text('home:'), findsOneWidget);
+    graph.go(N.profile, 'a');
+    await tester.pumpAndSettle();
+    expect(find.text('profile:a'), findsOneWidget);
+    // system back routes through the manager's BackButtonListener
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.text('home:'), findsOneWidget);
+  });
+
+  testWidgets('manager(restorationId:) round-trips the snapshot', (tester) async {
+    final g1 = N.graph();
+    await tester.pumpWidget(
+        MaterialApp(restorationScopeId: 'app', home: g1.manager(restorationId: 'nav')));
+    g1.go(N.profile, 'p');
+    await tester.pumpAndSettle();
+    await tester.restartAndRestore();
+    expect(find.text('profile:p'), findsOneWidget);
+  });
+
   testWidgets('go pushes and pop returns', (tester) async {
     final graph = await pump(tester);
     graph.go(N.profile, 'a');

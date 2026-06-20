@@ -1,3 +1,7 @@
+## 0.13.0
+
+- Add `Screen.manager()` / `NavGraph.manager()` — a standalone nav host for `MaterialApp(home: ...)`, no Router/RouteInformation channel (URLs/deep-links never drive the stack). Owns system back; with a restorationId, persists/restores the snapshot. `Screen.delegate` (Router/MaterialApp.router) stays for URL/web integration.
+
 ## 0.12.0
 
 - **Breaking: ids are read only through the typed `context.idOf(...)`.** `ScreenScope` is now `@internal` and canon wraps every page in it itself, so `pageOf` no longer wraps it and `PageCtx.entry` is gone (use `PageCtx.screen`). The raw `Object? id` is never exposed to screen code; the generated `context.idOf(ScreenId.x)` (id-bearing screens only) is the single sanctioned, non-null reader.

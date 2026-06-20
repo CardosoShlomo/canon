@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -195,6 +196,12 @@ final class NavGraph<I extends InitialScreenBase> {
   };
 
   late final NavDelegate delegate;
+
+  /// A standalone nav host for `MaterialApp(home: ...)` — no Router, no
+  /// RouteInformation channel (URLs/deep-links never drive the stack). Owns
+  /// system back; with [restorationId] set, also snapshot restoration.
+  Widget manager({String? restorationId}) =>
+      ScreenManager._(this, restorationId);
 
   final Map<Enum, _Scope> _scopes = {};
 
@@ -549,4 +556,80 @@ final class NavDelegate extends RouterDelegate<Object>
   Future<void> setNewRoutePath(Object configuration) => SynchronousFuture(null);
 
   void _refresh() => notifyListeners();
+}
+
+/// Drop into `MaterialApp(home: ...)` via `Screen.manager()`. Hosts the same
+/// nav tree as the delegate but with no Router/RouteInformation channel, so URLs
+/// and deep-links can't drive the stack — handle links imperatively. Owns system
+/// back; with a restorationId, persists/restores the snapshot (no URLs).
+final class ScreenManager extends StatelessWidget {
+  const ScreenManager._(this._graph, this._restorationId);
+
+  final NavGraph<dynamic> _graph;
+  final String? _restorationId;
+
+  @override
+  Widget build(BuildContext context) {
+    final body = _ManagerBody(_graph, restore: _restorationId != null);
+    if (_restorationId == null) return body;
+    return RootRestorationScope(restorationId: _restorationId, child: body);
+  }
+}
+
+class _ManagerBody extends StatefulWidget {
+  const _ManagerBody(this.graph, {required this.restore});
+
+  final NavGraph<dynamic> graph;
+  final bool restore;
+
+  @override
+  State<_ManagerBody> createState() => _ManagerBodyState();
+}
+
+class _ManagerBodyState extends State<_ManagerBody>
+    with RestorationMixin, WidgetsBindingObserver {
+  final RestorableStringN _snap = RestorableStringN(null);
+  VoidCallback? _off;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  // Routes system back to the active scope's navigator (no Router needed).
+  @override
+  Future<bool> didPopRoute() => widget.graph.delegate.popRoute();
+
+  @override
+  String? get restorationId => widget.restore ? 'canon_nav' : null;
+
+  @override
+  void restoreState(RestorationBucket? oldBucket, bool initialRestore) {
+    if (!widget.restore) return;
+    registerForRestoration(_snap, 'stack');
+    final s = _snap.value;
+    if (s != null) {
+      widget.graph.restore(jsonDecode(s) as Map<String, Object?>);
+    }
+    _off ??= widget.graph
+        .observe((_, __) => _snap.value = jsonEncode(widget.graph.toState()));
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _off?.call();
+    _snap.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = widget.graph.delegate;
+    return AnimatedBuilder(
+      animation: d,
+      builder: (context, _) => d.build(context),
+    );
+  }
 }
