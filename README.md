@@ -78,6 +78,8 @@ Screen.goSettings();
 Screen.goThread(threadId);
 ```
 
+For a *dynamic* kick-start, `Screen.go(Hop.x)` takes a ternary and returns a `KickstartNav` — `.at` narrows it to the exact screen it landed on (exhaustive switch).
+
 **Surgical-chain** — continue from a live position; ids already on the stack are reused. `Screen.on(.path)` returns a placement (a typed `…Nav`) or `null`, each step offers only satisfiable children, and a whole path commits as **one** transition:
 
 ```dart
@@ -158,7 +160,7 @@ await save();                                // navigation may move on during th
 thread.goUser(userId);                       // throws IF user is no longer a live edge from here
 ```
 
-Where a screen has 2+ children or ancestors, `go(Hop.x)` / `popTo(Pop.x)` take a ternary and resolve to the least-common placement type (e.g. `go(busy ? Hop.user(a) : Hop.comment(c))`).
+Where a screen has 2+ children or ancestors, `go(Hop.x)` / `popTo(Pop.x)` take a ternary for dynamic branching — `go(busy ? Hop.user(a) : Hop.comment(c))` — returning the least-common placement type; chain off a named verb when you need a specific one.
 
 ## Inspect position — typed, exhaustive
 
@@ -237,9 +239,9 @@ The payoff: the spec at the top of this file *is* the complete, auditable nav sp
 
 ```yaml
 dependencies:
-  canon: ^0.15.0            # runtime
+  canon: ^0.15.1            # runtime
 dev_dependencies:
-  canon_generator: ^0.18.0  # codegen — emits screen.nav.dart
+  canon_generator: ^0.19.0  # codegen — emits screen.nav.dart
   build_runner: any
 ```
 

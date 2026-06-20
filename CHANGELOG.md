@@ -1,3 +1,7 @@
+## 0.15.1
+
+- Docs: `Screen.go(Hop)` returns a `KickstartNav` (`.at` narrows to the landed target) as of canon_generator 0.19.0.
+
 ## 0.15.0
 
 - `pageOf` and `observers` are now optional (`pageOf` defaults to `MaterialPage`).
