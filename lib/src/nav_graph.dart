@@ -199,8 +199,9 @@ final class NavGraph<I extends InitialScreenBase> {
 
   /// A standalone nav host for `MaterialApp(home: ...)` — no Router, no
   /// RouteInformation channel (URLs/deep-links never drive the stack). Owns
-  /// system back; with [restorationId] set, also snapshot restoration.
-  Widget manager({String? restorationId}) =>
+  /// system back and snapshot restoration (always on; [restorationId] is the
+  /// stable storage key, override only to avoid a collision).
+  Widget manager({String restorationId = 'nav'}) =>
       ScreenManager._(this, restorationId);
 
   final Map<Enum, _Scope> _scopes = {};
@@ -566,21 +567,19 @@ final class ScreenManager extends StatelessWidget {
   const ScreenManager._(this._graph, this._restorationId);
 
   final NavGraph<dynamic> _graph;
-  final String? _restorationId;
+  final String _restorationId;
 
   @override
-  Widget build(BuildContext context) {
-    final body = _ManagerBody(_graph, restore: _restorationId != null);
-    if (_restorationId == null) return body;
-    return RootRestorationScope(restorationId: _restorationId, child: body);
-  }
+  Widget build(BuildContext context) => RootRestorationScope(
+        restorationId: _restorationId,
+        child: _ManagerBody(_graph),
+      );
 }
 
 class _ManagerBody extends StatefulWidget {
-  const _ManagerBody(this.graph, {required this.restore});
+  const _ManagerBody(this.graph);
 
   final NavGraph<dynamic> graph;
-  final bool restore;
 
   @override
   State<_ManagerBody> createState() => _ManagerBodyState();
@@ -602,11 +601,10 @@ class _ManagerBodyState extends State<_ManagerBody>
   Future<bool> didPopRoute() => widget.graph.delegate.popRoute();
 
   @override
-  String? get restorationId => widget.restore ? 'canon_nav' : null;
+  String? get restorationId => 'canon_nav';
 
   @override
   void restoreState(RestorationBucket? oldBucket, bool initialRestore) {
-    if (!widget.restore) return;
     registerForRestoration(_snap, 'stack');
     final s = _snap.value;
     if (s != null) {

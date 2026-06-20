@@ -1,3 +1,7 @@
+## 0.14.0
+
+- `Screen.manager()` restoration is now always on by default (`restorationId` defaults to `'nav'`); pass it only to override the storage key. Drop-in: existing `manager()` calls keep working, `manager()` with no args now restores.
+
 ## 0.13.0
 
 - Add `Screen.manager()` / `NavGraph.manager()` — a standalone nav host for `MaterialApp(home: ...)`, no Router/RouteInformation channel (URLs/deep-links never drive the stack). Owns system back; with a restorationId, persists/restores the snapshot. `Screen.delegate` (Router/MaterialApp.router) stays for URL/web integration.
