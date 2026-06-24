@@ -18,9 +18,9 @@ class _Init implements InitialScreenBase {
   final List<(Enum, Object?)> chain;
 }
 
-NavGraph<_Init> _graph() => NavGraph<_Init>(
+NavGraph _graph() => NavGraph(
       {R.home(), R.feed()},
-      initial: const _Init([(R.home, null)]),
+      seedChain: const _Init([(R.home, null)]),
       pageOf: (w, c, k) => MaterialPage(child: w),
     );
 

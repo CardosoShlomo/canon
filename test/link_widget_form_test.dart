@@ -23,14 +23,14 @@ class _Init implements InitialScreenBase {
 }
 
 void main() {
-  final graph = NavGraph<_Init>(
+  final graph = NavGraph(
     {
       W.home(),
       W.user({
         slots({Codec.literal('me'), Codec.username})
       }),
     },
-    initial: const _Init([(W.home, null)]),
+    seedChain: const _Init([(W.home, null)]),
     pageOf: (w, c, k) => MaterialPage(child: w),
   );
 

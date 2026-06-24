@@ -205,7 +205,7 @@ final class _ScopeLiveness extends InheritedWidget {
 final class Nav {
   Nav._(this._graph);
 
-  final NavGraph<dynamic> _graph;
+  final NavGraph _graph;
 
   Nav go<T>(Enum screen, [T? id]) => _graph.go(screen, id);
 
@@ -239,26 +239,40 @@ class _Sim {
   List<StackEntry> get stack => stacks[active]!;
 }
 
-/// The starting stack, as a pure root..target chain of (screen, id). The
-/// generated `InitialScreen` is the only thing implementing this, so `initial:`
-/// rejects a navigating `Screen.goX` or a live-stack `Screen.on(...)`.
+/// A direct stack seed (root..target chain of (screen, id)) for the `seedChain:`
+/// constructor arg — used by engine/restore code and tests to start at a specific
+/// stack. Consumers instead pass `initial:` (the boot widget) and let the resolver
+/// drive the first navigation; see [BootScreen].
 abstract interface class InitialScreenBase {
   List<(Enum, Object?)> get chain;
 }
 
-final class NavGraph<I extends InitialScreenBase> {
+/// The synthetic boot placement. When a graph is built with a [bootWidget], the
+/// stack is seeded as `[(BootScreen.initial, null)]` — so the always-non-empty
+/// invariant holds — and `current`/`Screen.at` report it until the first commit,
+/// which the engine auto-replaces (the boot entry leaves no history). Never part
+/// of a consumer tree; the generated `Screen.at` maps it to `Initial`.
+enum BootScreen { initial }
+
+final class NavGraph {
   NavGraph(
     Set<TreeNode> rootScreens, {
     this.pageOf = _defaultPageOf,
-    required I initial,
+    Object? initial,
+    InitialScreenBase? seedChain,
     this._observers = _noObservers,
-  })  : spec = NavSpec(rootScreens) {
+  })  : assert((initial == null) != (seedChain == null),
+            'pass exactly one of `initial:` (the boot widget) or `seedChain:`'),
+        spec = NavSpec(rootScreens) {
     _linkRoot = _linkRootOf(rootScreens, spec);
     delegate = NavDelegate._(this);
-    final chain = initial.chain;
+    _bootWidget = initial;
+    final chain = initial != null
+        ? const <(Enum, Object?)>[(BootScreen.initial, null)]
+        : seedChain!.chain;
     _activeRoot = chain.first.$1;
     final scope = _Scope();
-    var node = spec.canonical[_activeRoot]!;
+    var node = initial != null ? _bootNode : spec.canonical[_activeRoot]!;
     Enum? from;
     for (var i = 0; i < chain.length; i++) {
       final (screen, id) = chain[i];
@@ -380,6 +394,19 @@ final class NavGraph<I extends InitialScreenBase> {
   final List<Enum> _visited = [];
   late Enum _activeRoot;
   _Sim? _sim;
+
+  /// The consumer's boot loading UI (a `W`), shown for the [BootScreen.initial]
+  /// entry; null when the graph was seeded from a chain instead.
+  Object? _bootWidget;
+  final GrammarNode _bootNode = GrammarNode(BootScreen.initial);
+
+  /// True while the active top is the synthetic boot placement (pre-first-commit).
+  bool get _booting => _activeRoot == BootScreen.initial;
+
+  /// The cold-start URL, set by the web Router before first frame; the generated
+  /// `Screen.initialUrl` parses it to a typed `Link?`. Null off the web / warm.
+  String? bootUrl;
+
   bool _scheduled = false;
   late final Nav _nav = Nav._(this);
   final _navListeners = <void Function(Enum from, Enum to)>[];
@@ -567,6 +594,23 @@ final class NavGraph<I extends InitialScreenBase> {
     final sim = _ensureSim();
     _consumeReplace(sim);
     final target = screen;
+    if (sim.active == BootScreen.initial) {
+      // First commit out of boot: drop the boot entry, seed the target's root
+      // fresh, and force replace — the loading screen leaves no history. The
+      // resolver stays cold/warm-unaware (it just writes `Screen.goX()`).
+      final root = spec.rootOf(target);
+      sim.stacks.remove(BootScreen.initial);
+      sim.active = root;
+      sim.stacks[root] = [_seed(root, id)];
+      sim.mode = .replace;
+      if (target != root) {
+        _apply(sim,
+            resolveGo(spec, sim.stack, target, id, onCanonicalFallback: _warnCanonical));
+      } else {
+        _schedule();
+      }
+      return _nav;
+    }
     if (edgeRequired) {
       if (sim.stack.isEmpty || spec.edge(sim.stack.last.node, target) == null) {
         final from =
@@ -695,6 +739,12 @@ final class NavGraph<I extends InitialScreenBase> {
       }
       if (_navStream.hasListener) _navStream.add(nav);
     }
+    // First commit out of boot: drop the now-parked boot scope so its loading
+    // widget unmounts and never re-renders.
+    if (_activeRoot != BootScreen.initial && _scopes.containsKey(BootScreen.initial)) {
+      _scopes.remove(BootScreen.initial);
+      _visited.remove(BootScreen.initial);
+    }
     delegate._refresh();
   }
 
@@ -702,12 +752,18 @@ final class NavGraph<I extends InitialScreenBase> {
       {required bool animate, required Enum? from}) {
     final screen = entry.screen;
     // canon owns the ScreenScope wrap, so the raw entry/id never reaches pageOf.
-    final content =
-        ScreenScope(entry: entry, child: (screen as WidgetScreen).widget as Widget);
+    final widget = screen == BootScreen.initial
+        ? _bootWidget as Widget
+        : (screen as WidgetScreen).widget as Widget;
+    final content = ScreenScope(entry: entry, child: widget);
     return pageOf(
       content,
       PageCtx(screen, animate: animate, from: from),
-      spec.isMulti(screen) ? UniqueKey() : ValueKey(screen.name),
+      screen == BootScreen.initial
+          ? const ValueKey('__boot__')
+          : spec.isMulti(screen)
+              ? UniqueKey()
+              : ValueKey(screen.name),
     );
   }
 
@@ -730,7 +786,7 @@ final class NavDelegate extends RouterDelegate<Object>
     with ChangeNotifier, PopNavigatorRouterDelegateMixin<Object> {
   NavDelegate._(this._graph);
 
-  final NavGraph<dynamic> _graph;
+  final NavGraph _graph;
 
   @override
   GlobalKey<NavigatorState> get navigatorKey => _graph._activeScope.navKey;
@@ -775,7 +831,7 @@ final class NavDelegate extends RouterDelegate<Object>
 final class ScreenManager extends StatelessWidget {
   const ScreenManager._(this._graph, this._restorationId);
 
-  final NavGraph<dynamic> _graph;
+  final NavGraph _graph;
   final String _restorationId;
 
   @override
@@ -788,7 +844,7 @@ final class ScreenManager extends StatelessWidget {
 class _ManagerBody extends StatefulWidget {
   const _ManagerBody(this.graph);
 
-  final NavGraph<dynamic> graph;
+  final NavGraph graph;
 
   @override
   State<_ManagerBody> createState() => _ManagerBodyState();

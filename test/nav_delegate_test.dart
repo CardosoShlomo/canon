@@ -16,12 +16,12 @@ enum N with ScreenNode<N> {
 
   static N _profile() => profile({profile.cycled, chat({profile.cycled})});
 
-  static NavGraph<_Init> graph() => NavGraph(
+  static NavGraph graph() => NavGraph(
         {
           home.keep({_profile()}),
           feed({_profile()}),
         },
-        initial: const _Init([(home, null)]),
+        seedChain: const _Init([(home, null)]),
         pageOf: (widget, ctx, key) => MaterialPage(key: key, child: widget),
       );
 }
@@ -79,12 +79,12 @@ enum K with ScreenNode<K> {
   @override
   Widget get widget => _Track(name);
 
-  static NavGraph<_InitK> graph() => NavGraph(
+  static NavGraph graph() => NavGraph(
         {
           home({services({shop.keep()})}),
           other,
         },
-        initial: const _InitK([(home, null)]),
+        seedChain: const _InitK([(home, null)]),
         pageOf: (widget, ctx, key) => MaterialPage(key: key, child: widget),
       );
 }
@@ -96,7 +96,7 @@ class _InitK implements InitialScreenBase {
 }
 
 void main() {
-  Future<NavGraph<_Init>> pump(WidgetTester tester) async {
+  Future<NavGraph> pump(WidgetTester tester) async {
     final graph = N.graph();
     await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
     return graph;
@@ -203,9 +203,9 @@ void main() {
   });
 
   testWidgets('initial seeds a multi-entry starting stack', (tester) async {
-    final graph = NavGraph<_Init>(
+    final graph = NavGraph(
       {N.home.keep({N._profile()}), N.feed()},
-      initial: const _Init([(N.home, null), (N.profile, 'p')]),
+      seedChain: const _Init([(N.home, null), (N.profile, 'p')]),
       pageOf: (widget, ctx, key) => MaterialPage(key: key, child: widget),
     );
     await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
