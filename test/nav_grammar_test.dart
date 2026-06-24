@@ -389,4 +389,29 @@ void main() {
       expect(resolvePop([s.entry(S.home)], S.chat), isNull);
     });
   });
+
+  group('links (link-world boundary)', () {
+    test('.links makes a LinkBranch carrying link grammar', () {
+      final b = S.home.links();
+      expect(b, isA<LinkBranch>());
+      expect((b as LinkBranch).node, isNotNull);
+    });
+
+    test('NavSpec skips a root LinkBranch — links seed no nav screen', () {
+      final spec = NavSpec({
+        S.home({S.feed}),
+        S.home.links(), // root link branch → ignored by nav
+      });
+      expect(spec.canonical.length, 2); // home, feed only
+      expect(spec.canonical.containsKey(S.home), isTrue);
+      expect(spec.canonical.containsKey(S.feed), isTrue);
+    });
+
+    test('a LinkBranch nested inside a .call placement is also skipped', () {
+      final spec = NavSpec({
+        S.settings({S.language, S.home.links()}), // nested link branch
+      });
+      expect(spec.canonical.length, 2); // settings, language — link skipped
+    });
+  });
 }

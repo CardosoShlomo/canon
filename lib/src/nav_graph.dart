@@ -6,11 +6,95 @@ import 'package:flutter/material.dart' show MaterialPage;
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart';
 
+import 'package:canon_codec/canon_codec.dart';
+
+import 'link_dsl.dart';
+import 'link_matcher.dart';
+import 'link_spec.dart';
 import 'screen_node.dart';
 
 /// Default page when the consumer gives no `pageOf`: a platform Material page.
 Page<void> _defaultPageOf(Widget widget, PageCtx ctx, LocalKey key) =>
     MaterialPage<void>(key: key, child: widget);
+
+/// The shape of a committed navigation, derived from the active scope's stack
+/// delta: [forward] grew the stack, [backward] shrank it, [roundTrip] did both
+/// (a `popTo(...).go(...)` chain), [jump] switched scope/root (a kick-start).
+enum NavDirection { forward, backward, roundTrip, jump }
+
+/// How a committed navigation maps to history: [push] adds a new entry,
+/// [replace] overwrites the current one (no back-target). Default is [push];
+/// the generated `Screen.replace` flips a batch to [replace], and the engine
+/// forces [replace] for the first commit out of the boot state. The web Router
+/// delegate reads it (`pushState`/`replaceState`); the bare stack engine, which
+/// has no history, ignores it.
+enum CommitMode { push, replace }
+
+/// An immutable snapshot of one committed navigation, delivered to
+/// [NavGraph.navigations]. Safe to hold past the commit: it captures the
+/// transition rather than reading live state, so async (stream) delivery never
+/// sees a stale position. [from] and [to] are the full active-scope stacks
+/// (bottom-to-top, each entry a `(screen, id)`); the generated layer retypes
+/// them into the public `ScreenEntry` stack.
+final class Navigation {
+  Navigation({required this.from, required this.to, this.mode = .push});
+
+  /// Full active-scope stack BEFORE the navigation, bottom-to-top.
+  final List<(Enum, Object?)> from;
+
+  /// Full active-scope stack AFTER the navigation, bottom-to-top.
+  final List<(Enum, Object?)> to;
+
+  /// Whether this commit pushes a new history entry or replaces the current one.
+  final CommitMode mode;
+
+  /// The top entry left / landed on.
+  (Enum, Object?) get source => from.last;
+  (Enum, Object?) get destination => to.last;
+
+  // Everything below is DERIVED from [from]/[to] — no stored state. Entries
+  // compare by value `(screen, id)`, so a cycle's repeated frame is handled.
+  bool get _sameRoot => from.first.$1 == to.first.$1;
+
+  late final int _common = () {
+    if (!_sameRoot) return 0;
+    var c = 0;
+    while (c < from.length && c < to.length && from[c] == to[c]) {
+      c++;
+    }
+    return c;
+  }();
+
+  NavDirection get direction {
+    if (!_sameRoot) return NavDirection.jump;
+    final popped = _common < from.length;
+    final pushed = _common < to.length;
+    return popped
+        ? (pushed ? NavDirection.roundTrip : NavDirection.backward)
+        : NavDirection.forward;
+  }
+
+  /// The deepest screen both stacks share, above which they diverged; null on a
+  /// scope [jump] (no common stack).
+  Enum? get pivot => _sameRoot && _common > 0 ? from[_common - 1].$1 : null;
+
+  /// Screens left behind (popped above the pivot), bottom-to-top.
+  List<Enum> get popped =>
+      _sameRoot ? [for (var i = _common; i < from.length; i++) from[i].$1] : const [];
+
+  /// Screens entered (pushed above the pivot), bottom-to-top.
+  List<Enum> get pushed =>
+      _sameRoot ? [for (var i = _common; i < to.length; i++) to[i].$1] : const [];
+
+  bool get isForward => direction == NavDirection.forward;
+  bool get isBackward => direction == NavDirection.backward;
+  bool get isRoundTrip => direction == NavDirection.roundTrip;
+  bool get isJump => direction == NavDirection.jump;
+
+  @override
+  String toString() =>
+      'Navigation(${from.last.$1.name} → ${to.last.$1.name}, ${direction.name})';
+}
 
 /// Default when the consumer gives no `observers`.
 List<NavigatorObserver> _noObservers() => const [];
@@ -149,6 +233,9 @@ class _Sim {
   final Map<Enum, List<StackEntry>> stacks;
   Enum active;
 
+  /// Set once per batch by [NavGraph.markReplace]; rides to [Navigation.mode].
+  CommitMode mode = .push;
+
   List<StackEntry> get stack => stacks[active]!;
 }
 
@@ -165,7 +252,8 @@ final class NavGraph<I extends InitialScreenBase> {
     this.pageOf = _defaultPageOf,
     required I initial,
     this._observers = _noObservers,
-  }) : spec = NavSpec(rootScreens) {
+  })  : spec = NavSpec(rootScreens) {
+    _linkRoot = _linkRootOf(rootScreens, spec);
     delegate = NavDelegate._(this);
     final chain = initial.chain;
     _activeRoot = chain.first.$1;
@@ -188,6 +276,83 @@ final class NavGraph<I extends InitialScreenBase> {
   }
 
   final NavSpec spec;
+
+  /// The runtime link tree assembled from every `.link`/widget-form branch in the
+  /// tree (root-level and nested, path-prefixed by their nav ancestors), or null
+  /// if the tree declares no links. The matcher walks it; host-agnostic (origin
+  /// is supplied per parse).
+  late final LinkNode? _linkRoot;
+
+  // Wrap [inner] in a chain of static segs for [ancestors] (outermost first), so
+  // a nested link carries its placement path (`profile` > `user` > slot).
+  static LinkTreeNode _prefix(List<String> ancestors, LinkTreeNode inner) {
+    var node = inner;
+    for (final name in ancestors.reversed) {
+      node = SegBuilder.forScreen(name)..children = {node};
+    }
+    return node;
+  }
+
+  static LinkNode? _linkRootOf(Set<TreeNode> rootScreens, NavSpec spec) {
+    final branches = <LinkTreeNode>{};
+    // Root-level links sit directly in the tree set (no enclosing placement).
+    for (final r in rootScreens) {
+      if (r is LinkBranch) branches.add(r.node);
+    }
+    // Nested links ride a placement; walk the canonical tree for their ancestors.
+    void visit(GrammarNode node, List<String> ancestors) {
+      final here = [...ancestors, node.screen.name];
+      for (final link in node.links) {
+        if (link is LinkBranch) {
+          // `.link` on some screen, placed in this node's set → URL is this
+          // node's full path, then the link's own (screen-rooted) subtree.
+          branches.add(_prefix(here, link.node));
+        } else if (link is LinkTreeNode) {
+          // Bare `slots`/`slot` in this screen's children = the WIDGET form: add
+          // the screen seg and inject its id codec as an extra union branch.
+          final id = node.screen is ScreenNodeBase
+              ? (node.screen as ScreenNodeBase).id
+              : null;
+          final leaf = id != null && link is SlotBuilder
+              ? link.withIdBranch(id)
+              : link;
+          branches.add(
+              _prefix(ancestors, SegBuilder.forScreen(node.screen.name)..children = {leaf}));
+        }
+      }
+      for (final child in node.children) {
+        visit(child, here);
+      }
+    }
+
+    for (final root in spec.roots) {
+      visit(root, const []);
+    }
+    return branches.isEmpty ? null : linkRoot(branches);
+  }
+
+  /// Parses [url] against the tree's `.links` grammar — PATH-ONLY: the host is
+  /// captured (reported back), never used as a match constraint (the platform's
+  /// link verification already proved it's ours). Returns the runtime match, or
+  /// null when the URL isn't a representable link. `Screen.parseLink` retypes it.
+  LinkMatch? parseLink(String url) {
+    final root = _linkRoot;
+    if (root == null) return null;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    final linkSpec = LinkSpec([DomainNode('${uri.scheme}://${uri.host}', root)]);
+    return LinkMatcher(linkSpec).parse(url);
+  }
+
+  /// Encodes a link's [template] (e.g. `user/*`) + ordered slot [values] (and,
+  /// per slot, the union codec [branches]) into a full URL under [domain] — the
+  /// inverse of [parseLink]. `Screen.toUri` maps a typed `Link` to this.
+  String encodeLink(
+      String domain, String template, List<Object?> values, List<int> branches) {
+    final linkSpec = LinkSpec([DomainNode(domain, _linkRoot!)]);
+    return LinkMatcher(linkSpec)
+        .printRoute(template: template, path: values, branches: branches);
+  }
 
   /// Builds a page for a screen's [widget] (already resolved to the owner's
   /// non-null widget; the screen + id are in `ctx.entry`).
@@ -218,14 +383,53 @@ final class NavGraph<I extends InitialScreenBase> {
   bool _scheduled = false;
   late final Nav _nav = Nav._(this);
   final _navListeners = <void Function(Enum from, Enum to)>[];
+  final StreamController<Navigation> _navStream =
+      StreamController<Navigation>.broadcast();
 
   Enum get current => _activeScope.slots.last.entry.screen;
 
-  /// Registers a side-effect listener fired AFTER each navigation commits (the
-  /// new top is settled), BEFORE its transition animates. Returns a disposer.
+  /// A broadcast stream of committed [Navigation] snapshots — the ergonomic
+  /// observer surface. Filter with `.where`, dispose via the subscription's
+  /// `cancel`. Delivery is async (a post-commit microtask), so it never blocks
+  /// the commit; for synchronous commit-phase side effects use [observe].
+  Stream<Navigation> get navigations => _navStream.stream;
+
+  /// Registers a SYNCHRONOUS side-effect listener fired AFTER each navigation
+  /// commits (new top settled), BEFORE its transition animates. Returns a
+  /// disposer. Prefer [navigations] unless you need commit-phase synchronicity.
   VoidCallback observe(void Function(Enum from, Enum to) fn) {
     _navListeners.add(fn);
     return () => _navListeners.remove(fn);
+  }
+
+  Navigation _buildNavigation(
+          List<StackEntry> fromStack, List<StackEntry> toStack, CommitMode mode) =>
+      Navigation(
+        from: [for (final e in fromStack) (e.screen, e.id)],
+        to: [for (final e in toStack) (e.screen, e.id)],
+        mode: mode,
+      );
+
+  /// Set by the generated `Screen.replace` before the chain's gos. The NEXT
+  /// commit this turn consumes it (its [Navigation.mode] becomes [replace]); if
+  /// the chain short-circuits with no commit (`Screen.replace.on(.x)?` missed),
+  /// a microtask drops it so it can never leak into a later navigation.
+  bool _pendingReplace = false;
+
+  /// Marks the batching navigation as a history [CommitMode.replace] rather than
+  /// a push. Inert on the bare stack engine (no history); the web Router delegate
+  /// reads [Navigation.mode] to `replaceState`.
+  @internal
+  void markReplace() {
+    _pendingReplace = true;
+    scheduleMicrotask(() => _pendingReplace = false);
+  }
+
+  // Fold a pending replace into [sim] at the first commit of the turn.
+  void _consumeReplace(_Sim sim) {
+    if (!_pendingReplace) return;
+    sim.mode = .replace;
+    _pendingReplace = false;
   }
 
   /// Canonical encoding of the live tree's shape — the generator emits the same
@@ -361,6 +565,7 @@ final class NavGraph<I extends InitialScreenBase> {
     assert(
         id != null || null is T || T == Never, '"${screen.name}" requires an id');
     final sim = _ensureSim();
+    _consumeReplace(sim);
     final target = screen;
     if (edgeRequired) {
       if (sim.stack.isEmpty || spec.edge(sim.stack.last.node, target) == null) {
@@ -400,6 +605,7 @@ final class NavGraph<I extends InitialScreenBase> {
   @internal
   Nav pop([Enum? until]) {
     final sim = _ensureSim();
+    _consumeReplace(sim);
     final res = resolvePop(sim.stack, until);
     if (res == null) {
       _sim = null;
@@ -454,6 +660,7 @@ final class NavGraph<I extends InitialScreenBase> {
     _sim = null;
     if (sim == null) return;
     final fromEntry = _activeScope.slots.last.entry;
+    final fromStack = [for (final s in _activeScope.slots) s.entry];
     for (final entry in sim.stacks.entries) {
       final scope = _scopeOf(entry.key);
       final target = entry.value;
@@ -480,10 +687,13 @@ final class NavGraph<I extends InitialScreenBase> {
     _activeRoot = sim.active;
     _scopeOf(_activeRoot);
     final toEntry = _activeScope.slots.last.entry;
-    if (!identical(fromEntry, toEntry) && _navListeners.isNotEmpty) {
+    if (!identical(fromEntry, toEntry)) {
+      final nav = _buildNavigation(
+          fromStack, [for (final s in _activeScope.slots) s.entry], sim.mode);
       for (final fn in [..._navListeners]) {
         fn(fromEntry.screen, toEntry.screen);
       }
+      if (_navStream.hasListener) _navStream.add(nav);
     }
     delegate._refresh();
   }

@@ -107,6 +107,66 @@ void main() {
     expect(find.text('home:'), findsOneWidget);
   });
 
+  testWidgets('navigations stream classifies direction + diff', (tester) async {
+    final graph = await pump(tester);
+    final seen = <Navigation>[];
+    final sub = graph.navigations.listen(seen.add);
+    addTearDown(sub.cancel);
+
+    graph.go(N.profile, 'a'); // forward push under the home scope
+    await tester.pumpAndSettle();
+    expect(seen.last.direction, NavDirection.forward);
+    expect(seen.last.destination, (N.profile, 'a'));
+    expect(seen.last.pushed, [N.profile]);
+    expect(seen.last.popped, isEmpty);
+    expect(seen.last.pivot, N.home);
+
+    graph.pop(); // backward
+    await tester.pumpAndSettle();
+    expect(seen.last.direction, NavDirection.backward);
+    expect(seen.last.source, (N.profile, 'a'));
+    expect(seen.last.destination, (N.home, null));
+    expect(seen.last.popped, [N.profile]);
+    expect(seen.last.pushed, isEmpty);
+
+    graph.go(N.feed); // jump — switch root/scope
+    await tester.pumpAndSettle();
+    expect(seen.last.direction, NavDirection.jump);
+    expect(seen.last.destination, (N.feed, null));
+    expect(seen.last.pivot, isNull);
+
+    graph.go(N.profile, 'x');
+    await tester.pumpAndSettle();
+    graph.pop(); // pop + go batched into one commit → round trip
+    graph.go(N.profile, 'y');
+    await tester.pumpAndSettle();
+    expect(seen.last.direction, NavDirection.roundTrip);
+    expect(seen.last.popped, [N.profile]);
+    expect(seen.last.pushed, [N.profile]);
+    expect(seen.last.destination, (N.profile, 'y'));
+  });
+
+  testWidgets('markReplace flags the batched commit; resets per batch',
+      (tester) async {
+    final graph = await pump(tester);
+    final seen = <Navigation>[];
+    final sub = graph.navigations.listen(seen.add);
+    addTearDown(sub.cancel);
+
+    graph.go(N.profile, 'a');
+    await tester.pumpAndSettle();
+    expect(seen.last.mode, CommitMode.push); // default
+
+    graph.markReplace(); // decide-at-start
+    graph.go(N.feed); // batched into one replace commit
+    await tester.pumpAndSettle();
+    expect(seen.last.mode, CommitMode.replace);
+
+    graph.go(N.home); // a fresh batch resets to push
+    await tester.pumpAndSettle();
+    expect(seen.last.mode, CommitMode.push);
+  });
+
   testWidgets('Screen.manager() mounts in MaterialApp.home; navigate + back',
       (tester) async {
     final graph = N.graph();

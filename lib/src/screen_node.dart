@@ -12,6 +12,8 @@ library;
 import 'package:canon_codec/canon_codec.dart';
 import 'package:meta/meta.dart';
 
+import 'link_dsl.dart';
+
 /// The host-facing face of a screen: its widget. The engine stays Flutter-free —
 /// W is abstract here; the Flutter alias binds it to `Widget`. Lets the host read
 /// a widget off an erased (`Enum`) screen; the name comes from `Enum` directly.
@@ -47,6 +49,12 @@ final class GrammarNode {
   /// pushes a fresh instance instead. Only meaningful on back-edges.
   final bool collapse;
   final List<GrammarNode> children = [];
+
+  /// Link branches declared at this placement: a `.link({...})` ([LinkBranch]) or
+  /// a bare `slots`/`slot` in children (a [LinkTreeNode] — the WIDGET form, whose
+  /// screen id is injected as an extra union branch). Runtime-read by [NavGraph]
+  /// to assemble the parse/encode matcher tree; never part of the nav stack.
+  final List<TreeNode> links = [];
   GrammarNode? parent;
 
   /// The node whose children answer "what may follow here" — self, or the
@@ -69,7 +77,10 @@ final class GrammarNode {
 /// `ScreenNodeBase`), a `cycled`/`stacked` back-edge, or a `graft` of another
 /// family. `<S>` keeps a native literal typed to one family; `graft` is the one
 /// explicit cross-family bridge.
-sealed class TreeNode<S> {}
+// Not sealed: link DSL nodes (`SlotBuilder`/`SegBuilder`, another library) also
+// implement this as `TreeNode<Never>`, so a bare `slots(...)` can sit directly in
+// a screen's children — covariance makes `TreeNode<Never>` a child of any screen.
+abstract interface class TreeNode<S> {}
 
 /// A `cycled`/`stacked` back-edge as a first-class set element. Carries the
 /// screen and fold mode; has no methods, so `.cycled.inherit(...)` can't be written.
@@ -83,6 +94,14 @@ final class _BackEdge<S> extends TreeNode<S> {
 final class _Graft<S> extends TreeNode<S> {
   _Graft(this.screen);
   final Enum screen;
+}
+
+/// A link-grammar branch placed in the tree (a root, or nested in a `.call`).
+/// It is GENERATOR-READ ONLY: the runtime nav engine ignores it (links don't
+/// seed the stack). Carries the link DSL node the generator walks to emit `Link`.
+final class LinkBranch<S> extends TreeNode<S> {
+  LinkBranch(this.node);
+  final LinkTreeNode node;
 }
 
 // Pending call/keep/forget nodes awaiting their parent. ONE global stash (nodes
@@ -128,6 +147,12 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   S _place(Set<TreeNode<S>> children, {bool keep = false, bool forget = false}) {
     final node = GrammarNode(this, keep: keep, forget: forget);
     for (final child in children) {
+      // Link declarations are not nav placements; stash them on the node for the
+      // runtime matcher (a LinkBranch = `.link`; a bare LinkTreeNode = widget form).
+      if (child is LinkBranch || child is LinkTreeNode) {
+        node.links.add(child);
+        continue;
+      }
       // A back-edge carries its own node; a graft claims the foreign node it
       // named; a bare screen claims its stashed call()/keep() node (tail-first,
       // so a nested set never steals an outer sibling's) or is a leaf.
@@ -161,6 +186,17 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   /// push verb takes no id and reads the live ancestor id instead. Read
   /// syntactically by the generator; a runtime no-op that returns self.
   S inherit(S ancestor) => _self;
+
+  /// Opens link-world for this screen: declares URL branches (`slot`/`slots`/
+  /// nested segs) that resolve to it. Generator-read; a runtime no-op (links
+  /// don't seed the nav stack). Children are link DSL nodes, so `.links` can't
+  /// nest — the one-way boundary is enforced by the child type.
+  LinkBranch<S> links([Set<LinkTreeNode?> children = const {}]) =>
+      LinkBranch<S>(SegBuilder.forScreen(name)..children = children);
+
+  /// Singular alias of [links] — reads naturally for a single union branch:
+  /// `user.link({slots({.literal('me'), .uuid(#userId), .username})})`.
+  LinkBranch<S> link([Set<LinkTreeNode?> children = const {}]) => links(children);
 }
 
 /// Mounts a [child] from ANOTHER screen family into this family's tree — the one
@@ -180,6 +216,7 @@ final class NavSpec {
   NavSpec(Set<TreeNode> rootScreens) {
     try {
       for (final root in rootScreens) {
+        if (root is LinkBranch) continue; // generator-read only, not a nav root
         if (root is _BackEdge) {
           throw StateError(
               'a back-edge (${root.screen}.${root.collapse ? 'cycled' : 'stacked'}) '
