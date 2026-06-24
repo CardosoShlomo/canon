@@ -679,7 +679,10 @@ final class NavGraph {
       if (e.screen == BootScreen.initial) continue;
       parts.add(_urlKebab(e.screen.name));
       final codec = (e.screen as ScreenNodeBase).id;
-      if (codec != null && e.id != null) parts.add(codec.encode(e.id));
+      // Inherited segments are bare — their id already rode the source segment.
+      if (codec != null && e.id != null && e.node.inheritsFrom == null) {
+        parts.add(codec.encode(e.id));
+      }
     }
     final base = '/${parts.join('/')}';
     // The active top's view-state mirrors into ?query / #fragment.
@@ -717,10 +720,19 @@ final class NavGraph {
       final codec = (screen as ScreenNodeBase).id;
       Object? id;
       if (codec != null) {
-        if (i >= segs.length) break; // id-bearing screen needs a token
-        id = codec.decode(segs[i]);
-        if (id == null) break; // codec rejected → truncate
-        i++;
+        if (node.inheritsFrom != null) {
+          // Inherited: no URL token — reuse the source segment's id from below.
+          final src = scope.slots
+              .where((s) => s.entry.screen == node.inheritsFrom)
+              .lastOrNull;
+          if (src == null) break; // source not on the stack → truncate
+          id = src.entry.id;
+        } else {
+          if (i >= segs.length) break; // id-bearing screen needs a token
+          id = codec.decode(segs[i]);
+          if (id == null) break; // codec rejected → truncate
+          i++;
+        }
       }
       final se = StackEntry(node, id);
       scope.slots.add(_Slot(se, _buildPage(se, animate: false, from: from)));

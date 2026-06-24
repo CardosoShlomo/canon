@@ -61,6 +61,11 @@ final class GrammarNode {
   /// by this; persisted in `toState`, historyless (replaceState) on set.
   Map<String, Codec<Object?>?> viewQuery = const {};
   Map<String, Codec<Object?>?> viewFragment = const {};
+
+  /// The ancestor screen this placement inherits its id from (`.inherit`), or
+  /// null. The nav-mirror URL puts the id on the SOURCE only — an inherited
+  /// segment is bare (`/item/42/edit-item`, not `…/edit-item/42`).
+  Enum? inheritsFrom;
   GrammarNode? parent;
 
   /// The node whose children answer "what may follow here" — self, or the
@@ -190,8 +195,12 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
 
   /// Declares this placement's id as [ancestor]'s (structurally): the generated
   /// push verb takes no id and reads the live ancestor id instead. Read
-  /// syntactically by the generator; a runtime no-op that returns self.
-  S inherit(S ancestor) => _self;
+  /// syntactically by the generator; at runtime stashes an inherit-marked node so
+  /// the nav-mirror URL can omit the (duplicate) id on this segment.
+  S inherit(S ancestor) {
+    _stash.add(GrammarNode(this)..inheritsFrom = ancestor);
+    return _self;
+  }
 
   /// Opens link-world for this screen: declares URL branches (`slot`/`slots`/
   /// nested segs) that resolve to it. Generator-read; a runtime no-op (links
