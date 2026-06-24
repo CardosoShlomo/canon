@@ -254,6 +254,18 @@ abstract interface class InitialScreenBase {
 /// of a consumer tree; the generated `Screen.at` maps it to `Initial`.
 enum BootScreen { initial }
 
+// camelCase screen name ⇄ kebab URL segment (`editAccount` ⇄ `edit-account`).
+String _urlKebab(String s) =>
+    s.replaceAllMapped(RegExp('[A-Z]'), (m) => '-${m[0]!.toLowerCase()}');
+String _urlUnkebab(String s) {
+  final parts = s.split('-');
+  return parts.first +
+      parts
+          .skip(1)
+          .map((p) => p.isEmpty ? p : p[0].toUpperCase() + p.substring(1))
+          .join();
+}
+
 final class NavGraph {
   NavGraph(
     Set<TreeNode> rootScreens, {
@@ -542,6 +554,72 @@ final class NavGraph {
     return true;
   }
 
+  /// The in-session **nav-mirror URL** derived from the ACTIVE scope: each
+  /// placement a kebab segment, each id a token via the screen's own codec
+  /// (`/account/42`, `/home/settings/about`). Lossy (parked tabs aren't in it) but
+  /// cold-start-capable. `/` while booting. The web Router reports this to the bar.
+  String currentUrl() {
+    final parts = <String>[];
+    for (final slot in _activeScope.slots) {
+      final e = slot.entry;
+      if (e.screen == BootScreen.initial) continue;
+      parts.add(_urlKebab(e.screen.name));
+      final codec = (e.screen as ScreenNodeBase).id;
+      if (codec != null && e.id != null) parts.add(codec.encode(e.id));
+    }
+    return '/${parts.join('/')}';
+  }
+
+  /// Reconciles the ACTIVE scope to a nav-mirror [url] (the inverse of
+  /// [currentUrl]) — cold-load / back-forward landing. Best-effort, exactly like
+  /// [restore]: replays legal edges and decodes ids, TRUNCATING at the first
+  /// illegal edge / unknown screen / codec-rejected token (keeping the valid
+  /// prefix). Returns false (no mutation) when nothing is representable.
+  bool applyUrl(String url) {
+    final segs =
+        Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
+    if (segs.isEmpty) return false;
+    final root = _byName[_urlUnkebab(segs.first)];
+    if (root == null || !spec.canonical.containsKey(root)) return false;
+    final scope = _Scope();
+    var node = spec.canonical[root]!;
+    Enum? from;
+    var i = 0;
+    while (i < segs.length) {
+      final screen = _byName[_urlUnkebab(segs[i])];
+      if (screen == null) break; // unknown screen → truncate
+      if (scope.slots.isNotEmpty) {
+        final next = spec.edge(node, screen);
+        if (next == null) break; // illegal edge → truncate
+        node = next;
+      }
+      i++;
+      final codec = (screen as ScreenNodeBase).id;
+      Object? id;
+      if (codec != null) {
+        if (i >= segs.length) break; // id-bearing screen needs a token
+        id = codec.decode(segs[i]);
+        if (id == null) break; // codec rejected → truncate
+        i++;
+      }
+      final se = StackEntry(node, id);
+      scope.slots.add(_Slot(se, _buildPage(se, animate: false, from: from)));
+      from = screen;
+    }
+    if (scope.slots.isEmpty) return false;
+    _scopes[root] = scope;
+    if (!_visited.contains(root)) {
+      _visited
+        ..add(root)
+        ..sort((a, b) => a.index.compareTo(b.index));
+    }
+    _activeRoot = root;
+    _scopes.remove(BootScreen.initial);
+    _visited.remove(BootScreen.initial);
+    delegate._refresh();
+    return true;
+  }
+
   List<StackEntry> get stack =>
       List.unmodifiable([for (final s in _activeScope.slots) s.entry]);
 
@@ -818,10 +896,52 @@ final class NavDelegate extends RouterDelegate<Object>
     );
   }
 
+  /// Reported to the platform after each commit → the browser URL bar. The
+  /// `state` is the blob ([toState]) — TRUTH for back/forward/refresh; the `uri`
+  /// is the derived lossy nav-mirror, self-sufficient only on blob-null cold-load.
   @override
-  Future<void> setNewRoutePath(Object configuration) => SynchronousFuture(null);
+  RouteInformation get currentConfiguration => RouteInformation(
+        uri: Uri.parse(_graph.currentUrl()),
+        state: _graph.toState(),
+      );
+
+  /// Cold-load / back / forward / refresh land here. Blob present (back/forward/
+  /// refresh) → restore it (truth). Blob absent (pasted/external cold URL) → the
+  /// nav-mirror reconcile (truncate-to-valid-prefix); a declared LINK is resolved
+  /// by the consumer's resolver off `Screen.initialUrl`, not here.
+  @override
+  Future<void> setNewRoutePath(Object configuration) {
+    if (configuration is RouteInformation) {
+      final state = configuration.state;
+      if (state is Map<String, Object?>) {
+        _graph.restore(state);
+      } else {
+        // Cold-load: record the URL so the resolver can read `Screen.initialUrl`
+        // (a declared LINK), then reconcile the nav-mirror. A link URL won't match
+        // `applyUrl` (no mutation) → the app stays at `Initial` for the resolver.
+        if (_graph._booting) _graph.bootUrl = configuration.uri.toString();
+        _graph.applyUrl(configuration.uri.toString());
+      }
+    }
+    return SynchronousFuture(null);
+  }
 
   void _refresh() => notifyListeners();
+}
+
+/// Parses incoming browser [RouteInformation] for the Router. Pass-through: the
+/// blob/URL split is decided in [NavDelegate.setNewRoutePath]. Pair with
+/// `Screen.delegate` under `MaterialApp.router`.
+final class CanonRouteParser extends RouteInformationParser<Object> {
+  const CanonRouteParser();
+
+  @override
+  Future<Object> parseRouteInformation(RouteInformation information) =>
+      SynchronousFuture(information);
+
+  @override
+  RouteInformation? restoreRouteInformation(Object configuration) =>
+      configuration is RouteInformation ? configuration : null;
 }
 
 /// Drop into `MaterialApp(home: ...)` via `Screen.manager()`. Hosts the same
