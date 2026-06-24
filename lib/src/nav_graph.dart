@@ -295,6 +295,11 @@ abstract final class Placement {
       _PlacementModel.isOn(context, screen);
   static bool isCurrent(BuildContext context, Enum screen) =>
       _PlacementModel.isCurrent(context, screen);
+
+  /// The current foreground screen, BROADLY reactive — the widget rebuilds on any
+  /// placement change. Backs the generated `Screen.of(context)` switch-to-render.
+  static Enum? current(BuildContext context) =>
+      InheritedModel.inheritFrom<_PlacementModel>(context)?.top;
 }
 
 /// Chain handle: hops queued in one synchronous expression commit together on
