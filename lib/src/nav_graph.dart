@@ -239,6 +239,14 @@ abstract final class Fragment {
 /// Reactive placement membership. Widgets depend on a single screen aspect and
 /// rebuild only when THAT screen enters or leaves the active placement chain
 /// (becomes on/at) — not on unrelated navigation.
+/// One view-state condition term in a selector (`.category('books')`, `.not.byFav`).
+/// The generated per-screen `…Cond` types implement this; `Screen.on`/`context.on`
+/// gate on `test(liveValue)`, and [key] is the aspect a reactive read subscribes to.
+abstract interface class ViewCond {
+  String get key;
+  bool test(Object? value);
+}
+
 /// Aspect wrapper so `isCurrent` (top==screen) and `isOn` (chain∋screen) can both
 /// key on a screen without colliding in [_PlacementModel.updateShouldNotifyDependent].
 class _CurrentAspect {
