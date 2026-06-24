@@ -239,32 +239,62 @@ abstract final class Fragment {
 /// Reactive placement membership. Widgets depend on a single screen aspect and
 /// rebuild only when THAT screen enters or leaves the active placement chain
 /// (becomes on/at) — not on unrelated navigation.
-final class _PlacementModel extends InheritedModel<Enum> {
-  const _PlacementModel({required this.chain, required super.child});
-
-  final Set<Enum> chain;
-
-  static bool read(BuildContext context, Enum aspect) =>
-      InheritedModel.inheritFrom<_PlacementModel>(context, aspect: aspect)
-          ?.chain
-          .contains(aspect) ??
-      false;
-
+/// Aspect wrapper so `isCurrent` (top==screen) and `isOn` (chain∋screen) can both
+/// key on a screen without colliding in [_PlacementModel.updateShouldNotifyDependent].
+class _CurrentAspect {
+  const _CurrentAspect(this.screen);
+  final Enum screen;
   @override
-  bool updateShouldNotify(_PlacementModel old) => !setEquals(chain, old.chain);
-
+  bool operator ==(Object o) => o is _CurrentAspect && o.screen == screen;
   @override
-  bool updateShouldNotifyDependent(_PlacementModel old, Set<Enum> aspects) =>
-      aspects.any((a) => chain.contains(a) != old.chain.contains(a));
+  int get hashCode => screen.hashCode;
 }
 
-/// Reactive placement queries. `Placement.isOn(context, V.feed)` returns whether
-/// the active placement chain currently includes that screen AND rebuilds the
-/// widget only when that on/at status flips. The generated `Screen.of(context, …)`
-/// forwards here.
+final class _PlacementModel extends InheritedModel<Object> {
+  const _PlacementModel(
+      {required this.chain, required this.top, required super.child});
+
+  final Set<Enum> chain;
+  final Enum top;
+
+  static bool isOn(BuildContext context, Enum screen) =>
+      InheritedModel.inheritFrom<_PlacementModel>(context, aspect: screen)
+          ?.chain
+          .contains(screen) ??
+      false;
+
+  static bool isCurrent(BuildContext context, Enum screen) =>
+      InheritedModel.inheritFrom<_PlacementModel>(context,
+              aspect: _CurrentAspect(screen))
+          ?.top ==
+      screen;
+
+  @override
+  bool updateShouldNotify(_PlacementModel old) =>
+      top != old.top || !setEquals(chain, old.chain);
+
+  @override
+  bool updateShouldNotifyDependent(_PlacementModel old, Set<Object> aspects) {
+    for (final a in aspects) {
+      if (a is _CurrentAspect) {
+        if ((top == a.screen) != (old.top == a.screen)) return true;
+      } else if (a is Enum) {
+        if (chain.contains(a) != old.chain.contains(a)) return true;
+      }
+    }
+    return false;
+  }
+}
+
+/// Reactive placement queries. `Placement.isOn(context, V.feed)` → is that screen
+/// anywhere on the active chain; `Placement.isCurrent(context, V.feed)` → is it the
+/// foreground top. Each rebuilds the widget only when its own status flips. The
+/// generated `Screen.of(context, …)` / `Screen.isCurrentOf` forward here.
 abstract final class Placement {
   static bool isOn(BuildContext context, Enum screen) =>
-      _PlacementModel.read(context, screen);
+      _PlacementModel.isOn(context, screen);
+  static bool isCurrent(BuildContext context, Enum screen) =>
+      _PlacementModel.isCurrent(context, screen);
 }
 
 /// Chain handle: hops queued in one synchronous expression commit together on
@@ -1114,6 +1144,7 @@ final class NavDelegate extends RouterDelegate<Object>
       snapshot: _graph.viewSnapshot(),
       child: _PlacementModel(
         chain: _graph.currentChain.toSet(),
+        top: _graph.current,
         child: _buildStack(visited),
       ),
     );

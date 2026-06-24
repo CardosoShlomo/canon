@@ -27,9 +27,11 @@ class _Home extends StatelessWidget {
   Widget build(BuildContext context) {
     _homeBuilds++;
     final onDetail = Placement.isOn(context, V.detail);
+    final homeTop = Placement.isCurrent(context, V.home); // home is the foreground?
     return Directionality(
       textDirection: TextDirection.ltr,
-      child: Text(onDetail ? 'detail-on' : 'detail-off'),
+      child: Text('${onDetail ? 'detail-on' : 'detail-off'}/'
+          '${homeTop ? 'home-top' : 'home-buried'}'),
     );
   }
 }
@@ -46,14 +48,15 @@ void main() {
     );
 
     await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
-    expect(find.text('detail-off'), findsOneWidget);
+    expect(find.text('detail-off/home-top'), findsOneWidget); // home is the top
 
     graph.go(V.detail);
     await tester.pump();
-    expect(find.text('detail-on'), findsOneWidget); // detail entered the chain
+    // detail entered the chain AND became the top → home is now buried
+    expect(find.text('detail-on/home-buried'), findsOneWidget);
 
-    graph.pop(); // back to home → detail leaves the chain
+    graph.pop(); // back to home → detail leaves, home is top again
     await tester.pump();
-    expect(find.text('detail-off'), findsOneWidget);
+    expect(find.text('detail-off/home-top'), findsOneWidget);
   });
 }
