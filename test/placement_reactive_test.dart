@@ -49,14 +49,17 @@ void main() {
 
     await tester.pumpWidget(MaterialApp.router(routerDelegate: graph.delegate));
     expect(find.text('detail-off/home-top'), findsOneWidget); // home is the top
+    expect(_homeBuilds, 1);
 
     graph.go(V.detail);
     await tester.pump();
     // detail entered the chain AND became the top → home is now buried
     expect(find.text('detail-on/home-buried'), findsOneWidget);
+    expect(_homeBuilds, 2); // exactly one rebuild for the two-aspect flip
 
     graph.pop(); // back to home → detail leaves, home is top again
     await tester.pump();
     expect(find.text('detail-off/home-top'), findsOneWidget);
+    expect(_homeBuilds, 3); // exactly one rebuild per status change — never more
   });
 }
