@@ -201,6 +201,28 @@ final class _Combinator implements QueryTerm {
   }
 }
 
+/// Flattens a query/fragment term set into a key→codec schema (codec null = a
+/// flag). View-state placements (`screen(...).query({...})`) use this so the
+/// engine can encode/decode the stored values against the URL.
+Map<String, Codec<Object?>?> viewSchema(Set<QueryTerm> terms) {
+  final out = <String, Codec<Object?>?>{};
+  void add(Term t) {
+    switch (t) {
+      case KeyDef():
+        out[t.name] = t.codec;
+      case AllOf():
+        t.members.forEach(add);
+      case OneOf():
+        t.members.forEach(add);
+    }
+  }
+
+  for (final term in terms) {
+    add(term._buildTerm());
+  }
+  return out;
+}
+
 /// Co-occurrence: all of [members] present together (→ record) or none.
 QueryTerm allOf(Set<QueryTerm> members) => _Combinator(members, exclusive: false);
 

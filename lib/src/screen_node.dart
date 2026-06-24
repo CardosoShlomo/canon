@@ -55,6 +55,12 @@ final class GrammarNode {
   /// screen id is injected as an extra union branch). Runtime-read by [NavGraph]
   /// to assemble the parse/encode matcher tree; never part of the nav stack.
   final List<TreeNode> links = [];
+
+  /// View-state schema declared via `screen(...).query({...})` / `.fragment({...})`
+  /// — key → codec (null codec = a flag). The engine URL-mirrors the stored values
+  /// by this; persisted in `toState`, historyless (replaceState) on set.
+  Map<String, Codec<Object?>?> viewQuery = const {};
+  Map<String, Codec<Object?>?> viewFragment = const {};
   GrammarNode? parent;
 
   /// The node whose children answer "what may follow here" — self, or the
@@ -197,6 +203,31 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   /// Singular alias of [links] — reads naturally for a single union branch:
   /// `user.link({slots({.literal('me'), .uuid(#userId), .username})})`.
   LinkBranch<S> link([Set<LinkTreeNode?> children = const {}]) => links(children);
+
+  /// Declares this placement's view-state QUERY keys (`feed(...).query({category(
+  /// .string), radius(.int)})` → `?category=&radius=`). Screen-local, persisted,
+  /// historyless. Keys come from a [QueryKeyBase] enum: `key(codec)` = value, bare
+  /// key = flag. Read syntactically by the generator; at runtime attaches the
+  /// schema to this placement's node.
+  S query(Set<QueryTerm> terms) {
+    _attachView((n) => n.viewQuery = viewSchema(terms));
+    return _self;
+  }
+
+  /// Like [query] but for the URL FRAGMENT (`#message=`). Same key/codec rules.
+  S fragment(Set<QueryTerm> terms) {
+    _attachView((n) => n.viewFragment = viewSchema(terms));
+    return _self;
+  }
+
+  void _attachView(void Function(GrammarNode) apply) {
+    for (var i = _stash.length - 1; i >= 0; i--) {
+      if (_stash[i].screen == this && !_stash[i].again) {
+        apply(_stash[i]);
+        return;
+      }
+    }
+  }
 }
 
 /// Mounts a [child] from ANOTHER screen family into this family's tree — the one

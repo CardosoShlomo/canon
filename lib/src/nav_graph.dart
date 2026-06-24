@@ -277,6 +277,7 @@ final class NavGraph {
             'pass exactly one of `initial:` (the boot widget) or `seedChain:`'),
         spec = NavSpec(rootScreens) {
     _linkRoot = _linkRootOf(rootScreens, spec);
+    _collectViewSchema();
     delegate = NavDelegate._(this);
     _bootWidget = initial;
     final chain = initial != null
@@ -419,6 +420,90 @@ final class NavGraph {
   /// `Screen.initialUrl` parses it to a typed `Link?`. Null off the web / warm.
   String? bootUrl;
 
+  /// Per-screen view-state schema (`screen(...).query/.fragment`): key → codec
+  /// (null = flag), split into the query and fragment URL parts.
+  final Map<Enum,
+          ({Map<String, Codec<Object?>?> query, Map<String, Codec<Object?>?> fragment})>
+      _viewSchema = {};
+
+  /// Per-screen live view-state values (screen → key → value). Persisted in
+  /// [toState], mirrored into the URL query/fragment of the active top.
+  final Map<Enum, Map<String, Object?>> _viewValues = {};
+
+  void _collectViewSchema() {
+    void visit(GrammarNode n) {
+      if (n.viewQuery.isNotEmpty || n.viewFragment.isNotEmpty) {
+        _viewSchema[n.screen] = (query: n.viewQuery, fragment: n.viewFragment);
+      }
+      n.children.forEach(visit);
+    }
+
+    spec.roots.forEach(visit);
+  }
+
+  /// The current value of view-state [key] on [screen] (null = unset/default).
+  @internal
+  Object? viewGet(Enum screen, String key) => _viewValues[screen]?[key];
+
+  /// Sets view-state [key] on [screen] and re-reports the URL (a historyless
+  /// mirror — no stack change, no listeners; the widget that set it owns its own
+  /// rebuild). Null clears it (absent ⟺ default, per the round-trip rule).
+  @internal
+  void viewSet(Enum screen, String key, Object? value) {
+    final map = _viewValues[screen] ??= {};
+    if (value == null) {
+      map.remove(key);
+    } else {
+      map[key] = value;
+    }
+    delegate._refresh();
+  }
+
+  // The codec for a view-state key (query or fragment); null for a flag/unknown.
+  Codec<Object?>? _viewCodec(Enum screen, String key) {
+    final s = _viewSchema[screen];
+    return s == null ? null : (s.query[key] ?? s.fragment[key]);
+  }
+
+  // Encodes a screen's view-state for one URL part (`k=v&flag`), omitting unset
+  // values (absent ⟺ default).
+  String _encodeView(Enum screen, Map<String, Codec<Object?>?>? schema) {
+    if (schema == null) return '';
+    final vals = _viewValues[screen];
+    if (vals == null) return '';
+    final pairs = <String>[];
+    for (final e in schema.entries) {
+      final v = vals[e.key];
+      if (v == null) continue;
+      final codec = e.value;
+      if (codec == null) {
+        if (v == true) pairs.add(e.key); // flag: present = true
+      } else {
+        pairs.add('${e.key}=${Uri.encodeQueryComponent(codec.encode(v))}');
+      }
+    }
+    return pairs.join('&');
+  }
+
+  // Decodes a `k=v&flag` URL part into a screen's view-state (codec-rejected
+  // values are skipped, not fatal — view-state is best-effort like the mirror).
+  void _decodeView(Enum screen, Map<String, Codec<Object?>?>? schema, String raw) {
+    if (schema == null || raw.isEmpty) return;
+    final map = _viewValues[screen] ??= {};
+    for (final pair in raw.split('&')) {
+      final eq = pair.indexOf('=');
+      final key = eq < 0 ? pair : pair.substring(0, eq);
+      final codec = schema[key];
+      if (!schema.containsKey(key)) continue;
+      if (codec == null) {
+        map[key] = true; // flag present
+      } else if (eq >= 0) {
+        final decoded = codec.decode(Uri.decodeQueryComponent(pair.substring(eq + 1)));
+        if (decoded != null) map[key] = decoded;
+      }
+    }
+  }
+
   bool _scheduled = false;
   late final Nav _nav = Nav._(this);
   final _navListeners = <void Function(Enum from, Enum to)>[];
@@ -481,6 +566,15 @@ final class NavGraph {
   Map<String, Object?> toState() => {
         'v': structureSignature, // stale-graph guard: reject restore on mismatch
         'active': _activeRoot.name,
+        if (_viewValues.values.any((m) => m.isNotEmpty))
+          'views': {
+            for (final e in _viewValues.entries)
+              if (e.value.isNotEmpty)
+                e.key.name: {
+                  for (final kv in e.value.entries)
+                    kv.key: _viewCodec(e.key, kv.key)?.encode(kv.value) ?? kv.value,
+                },
+          },
         'scopes': {
           for (final e in _scopes.entries)
             e.key.name: [
@@ -550,6 +644,26 @@ final class NavGraph {
     final active = _byName[state['active']];
     _activeRoot =
         (active != null && built.containsKey(active)) ? active : built.keys.first;
+    // Rebuild view-state (decode each token via its codec; flags are raw bools).
+    _viewValues.clear();
+    final views = state['views'];
+    if (views is Map) {
+      for (final e in views.entries) {
+        final screen = _byName[e.key];
+        final vals = e.value;
+        if (screen == null || vals is! Map) continue;
+        final map = _viewValues[screen] ??= {};
+        for (final kv in vals.entries) {
+          final codec = _viewCodec(screen, kv.key as String);
+          if (codec == null) {
+            map[kv.key as String] = kv.value;
+          } else if (kv.value is String) {
+            final d = codec.decode(kv.value as String);
+            if (d != null) map[kv.key as String] = d;
+          }
+        }
+      }
+    }
     delegate._refresh();
     return true;
   }
@@ -567,7 +681,13 @@ final class NavGraph {
       final codec = (e.screen as ScreenNodeBase).id;
       if (codec != null && e.id != null) parts.add(codec.encode(e.id));
     }
-    return '/${parts.join('/')}';
+    final base = '/${parts.join('/')}';
+    // The active top's view-state mirrors into ?query / #fragment.
+    final top = _activeScope.slots.last.entry.screen;
+    final schema = _viewSchema[top];
+    final q = schema == null ? '' : _encodeView(top, schema.query);
+    final f = schema == null ? '' : _encodeView(top, schema.fragment);
+    return base + (q.isEmpty ? '' : '?$q') + (f.isEmpty ? '' : '#$f');
   }
 
   /// Reconciles the ACTIVE scope to a nav-mirror [url] (the inverse of
@@ -616,6 +736,15 @@ final class NavGraph {
     _activeRoot = root;
     _scopes.remove(BootScreen.initial);
     _visited.remove(BootScreen.initial);
+    // Decode the top screen's view-state from ?query / #fragment.
+    final top = scope.slots.last.entry.screen;
+    final schema = _viewSchema[top];
+    if (schema != null) {
+      final uri = Uri.parse(url);
+      _viewValues.remove(top);
+      _decodeView(top, schema.query, uri.query);
+      _decodeView(top, schema.fragment, uri.fragment);
+    }
     delegate._refresh();
     return true;
   }
