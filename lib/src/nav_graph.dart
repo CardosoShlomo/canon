@@ -211,6 +211,14 @@ final class _ViewModel extends InheritedModel<String> {
       InheritedModel.inheritFrom<_ViewModel>(context, aspect: aspect)
           ?.snapshot[aspect];
 
+  // Subscribe to a (screen, key) across both URL parts (a key lives in exactly
+  // one; the other aspect never fires) and return its live value.
+  static Object? readKey(BuildContext context, Enum screen, String key) {
+    final q = read(context, 'q:${screen.name}.$key');
+    final f = read(context, 'f:${screen.name}.$key');
+    return q ?? f;
+  }
+
   @override
   bool updateShouldNotify(_ViewModel old) => !mapEquals(snapshot, old.snapshot);
 
@@ -308,6 +316,18 @@ abstract final class Placement {
   /// placement change. Backs the generated `Screen.of(context)` switch-to-render.
   static Enum? current(BuildContext context) =>
       InheritedModel.inheritFrom<_PlacementModel>(context)?.top;
+}
+
+/// Reactive evaluation of a selector's view-state conditions — subscribes the
+/// widget to exactly the keys referenced (so it rebuilds when they change) and
+/// returns whether they all hold. Backs the generated `context.on`/`context.current`.
+abstract final class ViewMatch {
+  static bool conds(BuildContext context, Enum screen, List<ViewCond> conds) {
+    for (final c in conds) {
+      if (!c.test(_ViewModel.readKey(context, screen, c.key))) return false;
+    }
+    return true;
+  }
 }
 
 /// Chain handle: hops queued in one synchronous expression commit together on
