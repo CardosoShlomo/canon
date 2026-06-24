@@ -716,14 +716,16 @@ final class NavGraph {
                 },
           },
         'scopes': {
+          // The synthetic boot scope has no persistable state and no real screen.
           for (final e in _scopes.entries)
-            e.key.name: [
-              for (final s in e.value.slots)
-                [
-                  s.entry.screen.name,
-                  (s.entry.screen as ScreenNodeBase).id?.encode(s.entry.id),
-                ],
-            ],
+            if (e.key != BootScreen.initial)
+              e.key.name: [
+                for (final s in e.value.slots)
+                  [
+                    s.entry.screen.name,
+                    (s.entry.screen as ScreenNodeBase).id?.encode(s.entry.id),
+                  ],
+              ],
         },
       };
 
