@@ -199,6 +199,74 @@ final class _ScopeLiveness extends InheritedWidget {
   bool updateShouldNotify(_ScopeLiveness oldWidget) => active != oldWidget.active;
 }
 
+/// Reactive view-state. Widgets depend on a single key aspect (`q:screen.key` /
+/// `f:screen.key`) and rebuild ONLY when that key is added, removed, or changed —
+/// not on unrelated view-state or navigation. Provided above the Navigators.
+final class _ViewModel extends InheritedModel<String> {
+  const _ViewModel({required this.snapshot, required super.child});
+
+  final Map<String, Object?> snapshot;
+
+  static Object? read(BuildContext context, String aspect) =>
+      InheritedModel.inheritFrom<_ViewModel>(context, aspect: aspect)
+          ?.snapshot[aspect];
+
+  @override
+  bool updateShouldNotify(_ViewModel old) => !mapEquals(snapshot, old.snapshot);
+
+  @override
+  bool updateShouldNotifyDependent(_ViewModel old, Set<String> aspects) =>
+      aspects.any((a) => snapshot[a] != old.snapshot[a]);
+}
+
+/// Reactive, screen-local QUERY view-state. `Query.of<String>(context,
+/// FeedKeys.category)` returns the value for the screen this context is under AND
+/// subscribes the widget to that one key — it rebuilds only when the key is added,
+/// removed, or changed. The key comes from a [QueryKeyBase] enum.
+abstract final class Query {
+  static T? of<T>(BuildContext context, QueryKeyBase key) =>
+      _ViewModel.read(context, 'q:${ScreenScope.of(context).name}.${key.name}')
+          as T?;
+}
+
+/// Like [Query], but for the URL FRAGMENT view-state axis.
+abstract final class Fragment {
+  static T? of<T>(BuildContext context, QueryKeyBase key) =>
+      _ViewModel.read(context, 'f:${ScreenScope.of(context).name}.${key.name}')
+          as T?;
+}
+
+/// Reactive placement membership. Widgets depend on a single screen aspect and
+/// rebuild only when THAT screen enters or leaves the active placement chain
+/// (becomes on/at) — not on unrelated navigation.
+final class _PlacementModel extends InheritedModel<Enum> {
+  const _PlacementModel({required this.chain, required super.child});
+
+  final Set<Enum> chain;
+
+  static bool read(BuildContext context, Enum aspect) =>
+      InheritedModel.inheritFrom<_PlacementModel>(context, aspect: aspect)
+          ?.chain
+          .contains(aspect) ??
+      false;
+
+  @override
+  bool updateShouldNotify(_PlacementModel old) => !setEquals(chain, old.chain);
+
+  @override
+  bool updateShouldNotifyDependent(_PlacementModel old, Set<Enum> aspects) =>
+      aspects.any((a) => chain.contains(a) != old.chain.contains(a));
+}
+
+/// Reactive placement queries. `Placement.isOn(context, V.feed)` returns whether
+/// the active placement chain currently includes that screen AND rebuilds the
+/// widget only when that on/at status flips. The generated `Screen.of(context, …)`
+/// forwards here.
+abstract final class Placement {
+  static bool isOn(BuildContext context, Enum screen) =>
+      _PlacementModel.read(context, screen);
+}
+
 /// Chain handle: hops queued in one synchronous expression commit together on
 /// a microtask — one diff, one animation.
 @internal
@@ -457,6 +525,35 @@ final class NavGraph {
       map[key] = value;
     }
     delegate._refresh();
+  }
+
+  /// Flattened view-state for the reactive [_ViewModel]: `q:screen.key` /
+  /// `f:screen.key` → value, across every screen (so a parked tab's widgets read
+  /// their own view-state too).
+  Map<String, Object?> viewSnapshot() {
+    final out = <String, Object?>{};
+    for (final e in _viewSchema.entries) {
+      final vals = _viewValues[e.key] ?? const {};
+      for (final k in e.value.query.keys) {
+        out['q:${e.key.name}.$k'] = vals[k];
+      }
+      for (final k in e.value.fragment.keys) {
+        out['f:${e.key.name}.$k'] = vals[k];
+      }
+    }
+    return out;
+  }
+
+  /// The active top screen's query (or fragment) values — the context-free read
+  /// alongside `Screen.at`/`.on`/`.stack`. [part] is `'q'` or `'f'`.
+  @internal
+  Map<String, Object?> activeView(String part) {
+    final top = _activeScope.slots.last.entry.screen;
+    final schema = _viewSchema[top];
+    if (schema == null) return const {};
+    final keys = part == 'f' ? schema.fragment.keys : schema.query.keys;
+    final vals = _viewValues[top] ?? const {};
+    return {for (final k in keys) if (vals[k] != null) k: vals[k]};
   }
 
   // The codec for a view-state key (query or fragment); null for a flag/unknown.
@@ -1013,6 +1110,16 @@ final class NavDelegate extends RouterDelegate<Object>
   @override
   Widget build(BuildContext context) {
     final visited = _graph._visited;
+    return _ViewModel(
+      snapshot: _graph.viewSnapshot(),
+      child: _PlacementModel(
+        chain: _graph.currentChain.toSet(),
+        child: _buildStack(visited),
+      ),
+    );
+  }
+
+  Widget _buildStack(List<Enum> visited) {
     return IndexedStack(
       index: visited.indexOf(_graph._activeRoot),
       children: [

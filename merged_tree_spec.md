@@ -319,3 +319,48 @@ auto-replace (`current is Initial`), the `Screen.replace` static getter + `enum 
 flag, the literal/regex codecs, `Screen.initialUrl` + the merged generator surface, removing the old
 `InitialScreen`-chain mechanism, and (demand-gated) the query/fragment view-state axis.
 ```
+
+---
+
+## View-state + reactive context (DESIGNED 2026-06, locked — building now)
+
+The query/fragment view-state axis, settled into a unified read/write + reactive model. Supersedes the earlier note that it's demand-gated/do-not-build.
+
+**Data types (per screen with view-state):**
+- Everything **nullable** — no defaults, no `required`. Absent ⟺ null; defaults are the consumer's job at read (`q.sort ?? Newest`).
+- `FeedQuery` (read: getters) + `FeedQueryMut extends FeedQuery` (adds setters). Same for `FeedFragment`.
+- `oneOf(#sort, {newest, priceAsc(.string)})` → a sealed union `FeedSort? { Newest | PriceAsc(String) }`. `allOf(#price, {min(.int), max(.int)})` → a nullable record `(int,int)?` (all-or-none). Combinators need an explicit `#name`.
+- Encoding: omit-when-null (a value is in the URL iff non-null).
+
+**One sealed hierarchy — read-only `View` supertypes over navigable `Nav` leaves:**
+- `sealed class View {}` (canon) → per-screen `FeedView extends View` (read getters: `query`/`fragment`) → `FeedNav extends FeedView` (adds `goXx`/`popToXx` + mutable `query`/`fragment`). View-state-less screens: `FeedView` is an empty marker.
+- View-state lives on `QueryNav`/`FragmentNav`-style interfaces the navs implement (so `case QueryNav(:final query)` cross-cuts). `QueryFragmentNav implements QueryNav, FragmentNav` (not extends), so both-case falls into either arm.
+- **Reactive reads return read-only `View`s; navigation/writes only via the `Nav` leaf.** `goXx` isn't on `View`, so it can't compile from a reactive read (cast `as FeedNav` is the only, deliberate, escape). Minimal codegen: `View` is the thin upper layer; the heavy nav verbs stay on the leaf you already emit.
+
+**`Screen` = global/imperative; `context` = reactive. Reactive things never mutate; mutating things are never reactive.**
+
+| call | scope | returns | navigate/write? |
+|---|---|---|---|
+| `Screen.on(sel)` / `Screen.replace.on(sel)` / `Screen.at` | global current, imperative | `FeedNav?` | yes (push / replace) |
+| `Screen.of(context)` | global current, broad reactive | `View?` (switch it) | no |
+| `context.on(sel)` | **self** (the widget's own placement) reactive | `FeedView?` | no |
+| `context.current(sel)` | **current foreground** reactive | `View?` | no |
+| `Query.of` / `Fragment.of(context, key)` | self, placement-less typed single read | value | no |
+| `Screen.isCurrentOf(context)` | self vs current gate | `bool` | no |
+
+- `context.on` is **self** (the widget's own placement, ignoring what's pushed above — matches the stack prefix up to the widget's `ScreenScope` entry); `context.current` is the **foreground** (full stack). Self is reactive via the *conditions* in the selector, not the (fixed) placement. (`context.here` is the runner-up name for self.)
+- `Query.of(context, FeedKeys.category)` is the **placement-less** typed read (key types it, `ScreenScope` scopes it) and the **fine-grained** reactive read (one key). Kept distinct from `context.on` (whose `View` is a coarser match-snapshot).
+- `Screen.isCurrentOf(context)` is the self-vs-current gate; which-screen is `ScreenScope`.
+
+**Selectors / conditions (shared by `.on`/`.of`):**
+- `.feed.query({.category('books'), .not.byFav, .sort.newest}).fragment({...})` — a **set = AND** of condition terms. Terminal decides nothing special: `.on` always returns the (terminal) nav/view, gated.
+- Terms: `.key` (present/flag-true), `.key(v)` (equals), `.union.variant[(v)]` (oneOf variant), `allOf`/`oneOf` group conditions, each optionally `.not`-prefixed. **`.not` is a negated mirror** (`.not.byFav`=false, `.not.category`=absent, `.not.category('books')`=not-equals). **No separate `absent`** — it's `.not.<present>`. `.absent`-style nodes are call-less; here that's just the bare `.not.key`.
+- The match: placement suffix (specs+ids+cycle depth) AND all condition predicates. `On` carries `(specs, ids, view-predicates)`; one shared `matches(stack, viewStore)` used by `Screen.on` (imperative) and the reactive models.
+
+**Writes — mutable nav, top-scoped, push/replace via the gate:**
+- Only `nav.query.category = 'books'` (mutable `FeedQueryMut` off a `Nav`). `null` clears (remove from URL). `oneOf`: assigning the field is the exclusivity. No `Query.set`, no `Screen.set`.
+- The nav's terminal is always the matched **top**, so writes can only land on the current entry's screen → **a below screen's view-state can never be written** (closes the web back/forward stale-blob drop). `Query.of`/`Fragment.of` are read-only (no setter), so the self-read path can't write either.
+- History mode rides the gate: `Screen.on(.feed)?.query.x = y` → **push** (default, back-undoable on web); `Screen.replace.on(.feed)?...` → **replace**. View-state is **no longer always-historyless** (revises rule 18) — push by default, replace on demand, consistent with nav. Inert on mobile (no URL/history), like nav `replace`.
+- Convergence: a read-subscribe + same-key write is idempotent or flips its own match, so it can't loop; `viewSet` is idempotent (no notify on unchanged) + a debug assert against build-phase writes.
+
+**Builders:** `On`/`FeedView`/`FeedNav`/`FeedQuery` are **generated** (reference generated types); canon owns only the thin `View` base, `PlacementSelector` interface, the `context.*` extensions + the InheritedModels, and `Query`/`Fragment`/`Screen.isCurrentOf`.
