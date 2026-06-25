@@ -506,10 +506,47 @@ final class NavGraph {
   /// per slot, the union codec [branches]) into a full URL under [domain] — the
   /// inverse of [parseLink]. `Screen.toUri` maps a typed `Link` to this.
   String encodeLink(
-      String domain, String template, List<Object?> values, List<int> branches) {
+      String domain, String template, List<Object?> values, List<int> branches,
+      [Map<String, Object?> query = const {},
+      Map<String, Object?> fragment = const {}]) {
     final linkSpec = LinkSpec([DomainNode(domain, _linkRoot!)]);
-    return LinkMatcher(linkSpec)
-        .printRoute(template: template, path: values, branches: branches);
+    return LinkMatcher(linkSpec).printRoute(
+        template: template,
+        path: values,
+        branches: branches,
+        query: query,
+        fragment: fragment);
+  }
+
+  /// Encodes a nav path — the ordered [screens] from root to target, each with
+  /// its [ids] entry (null for an id-free or inherited-bare segment) — into the
+  /// nav-mirror URL under [domain]. The static counterpart of [currentUrl]: it
+  /// builds the SAME `/a/b/<id>` shape from an explicit chain, not the live
+  /// stack, so a typed `WidgetLink` can print its URL without navigating. Each
+  /// id round-trips through its codec (a value the parser would reject throws).
+  String encodeNavUrl(String domain, List<Enum> screens, List<Object?> ids,
+      [Map<String, Object?> query = const {},
+      Map<String, Object?> fragment = const {}]) {
+    final parts = <String>[];
+    for (var i = 0; i < screens.length; i++) {
+      final s = screens[i];
+      parts.add(_urlKebab(s.name));
+      final codec = (s as ScreenNodeBase).id;
+      if (codec != null && ids[i] != null) {
+        final token = codec.encode(ids[i]);
+        if (codec.decode(token) == null) {
+          throw ArgumentError.value(ids[i], '${s.name} id',
+              'is not valid for its codec — toUri() would produce an unparseable URL');
+        }
+        parts.add(Uri.encodeComponent(token));
+      }
+    }
+    final base = '$domain/${parts.join('/')}';
+    // View-state mirrors onto the TARGET (last) screen, exactly like currentUrl.
+    final schema = _viewSchema[screens.last];
+    final q = schema == null ? '' : _encodeViewMap(schema.query, query);
+    final f = schema == null ? '' : _encodeViewMap(schema.fragment, fragment);
+    return base + (q.isEmpty ? '' : '?$q') + (f.isEmpty ? '' : '#$f');
   }
 
   /// Builds a page for a screen's [widget] (already resolved to the owner's
@@ -627,10 +664,15 @@ final class NavGraph {
 
   // Encodes a screen's view-state for one URL part (`k=v&flag`), omitting unset
   // values (absent ⟺ default).
-  String _encodeView(Enum screen, Map<String, Codec<Object?>?>? schema) {
-    if (schema == null) return '';
-    final vals = _viewValues[screen];
-    if (vals == null) return '';
+  String _encodeView(Enum screen, Map<String, Codec<Object?>?>? schema) =>
+      _encodeViewMap(schema, _viewValues[screen]);
+
+  // Encodes explicit view [vals] against a [schema] into a `k=v&flag` part —
+  // the static counterpart of reading the live store. Used by `encodeNavUrl` so
+  // a typed link can carry view-state it was handed, not the current screen's.
+  String _encodeViewMap(
+      Map<String, Codec<Object?>?>? schema, Map<String, Object?>? vals) {
+    if (schema == null || vals == null) return '';
     final pairs = <String>[];
     for (final e in schema.entries) {
       final v = vals[e.key];

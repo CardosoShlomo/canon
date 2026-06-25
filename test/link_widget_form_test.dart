@@ -3,8 +3,8 @@ import 'package:canon/canon.dart';
 import 'package:test/test.dart';
 
 // The WIDGET form end-to-end at runtime: a bare `slots` in a real placement's
-// children. `user` owns id `uuid`, so the assembler injects uuid as an extra
-// union branch (after the leading literal) → order me(0), uuid(1), username(2).
+// children. `user` owns id `uuid`, so the assembler injects uuid as the FIRST
+// union branch (the canonical nav-target link leads) → uuid(0), me(1), username(2).
 enum W with ScreenNode<W> {
   home,
   user;
@@ -36,15 +36,15 @@ void main() {
 
   const uuid = '550e8400-e29b-41d4-a716-446655440000';
 
-  test('injected id branch matches /user/<uuid> at index 1', () {
+  test('injected id branch matches /user/<uuid> at index 0', () {
     final m = graph.parseLink('https://x.com/user/$uuid')!;
     expect(m.template, 'user/*');
-    expect(m.branches, [1]); // me=0, uuid=1, username=2
+    expect(m.branches, [0]); // uuid=0, me=1, username=2
     expect(m.path, [uuid]);
   });
 
-  test('literal branch /user/me → index 0', () {
-    expect(graph.parseLink('https://x.com/user/me')!.branches, [0]);
+  test('literal branch /user/me → index 1', () {
+    expect(graph.parseLink('https://x.com/user/me')!.branches, [1]);
   });
 
   test('username branch /user/<name> → index 2', () {
@@ -54,7 +54,7 @@ void main() {
   });
 
   test('encode round-trips the injected id branch', () {
-    expect(graph.encodeLink('https://x.com', 'user/*', [uuid], [1]),
+    expect(graph.encodeLink('https://x.com', 'user/*', [uuid], [0]),
         'https://x.com/user/$uuid');
   });
 }

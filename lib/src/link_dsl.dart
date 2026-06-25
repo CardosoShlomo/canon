@@ -144,13 +144,12 @@ final class SlotBuilder with _Chain {
   SlotBuilder fragment(Set<QueryTerm> t) => this.._ownFragment = _terms(t);
   SlotBuilder sharedQuery(Set<QueryTerm> t) => this.._sharedQuery = _terms(t);
 
-  /// The widget form: a copy with [id] inserted as a union branch after any
-  /// leading literal codecs (so order stays literals → id → values, matching the
-  /// generated branch indices). The enclosing screen's id is its WidgetLink branch.
+  /// The widget form: a copy with [id] inserted as the FIRST union branch (the
+  /// screen's own id is its canonical, renderable WidgetLink form; the declared
+  /// `slots` are widgetless resolver alternatives that follow). Matches the
+  /// generated branch indices: `[id, …declared]`.
   SlotBuilder withIdBranch(Codec<Object?> id) {
-    final at = codecs.indexWhere((c) => c is! LiteralCodec);
-    final reordered = [...codecs];
-    reordered.insert(at < 0 ? reordered.length : at, id);
+    final reordered = [id, ...codecs];
     return SlotBuilder._(reordered)
       ..children = children
       .._ownQuery = _ownQuery
