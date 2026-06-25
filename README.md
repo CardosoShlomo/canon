@@ -44,7 +44,7 @@ enum _Screens with ScreenNode<_Screens> {
       post({ editPost.inherit(post).query({ _View.dirty }), comment }),
       settings,
     }),
-    user.link({ slots({.username}) }),            // /<username> — a shareable deep link → user
+    user.link({ slot(.username) }),               // /user/<username> — a shareable deep link → user
   }, initial: const SplashScreen());              // boot UI, until the resolver commits the first screen
 }
 
@@ -197,6 +197,8 @@ Screen.at(.home)?.goSettings();        // jump back to home, then settings — o
 
 `Screen.stack` exposes `.current`, `.currentId`, `.screens`, `.reachable`, and `.tab` (the active root — the bottom of the stack).
 
+Each reach has two forms. **`Screen.on`/`Screen.at`** read a placement *once* — to inspect or navigate. **`context.on`/`context.at`** are their reactive twins: the same selector, but they return the typed **view** and **rebuild the widget surgically** — only when a key the selector names (or the foreground) actually changes, never on unrelated nav. Two axes: `Screen.` vs `context.` = read-once vs reactive rebuild; `.on` vs `.at` = foreground vs anywhere on the stack. (`Screen.<screen>Of(context)` reads this widget's *own* placement.)
+
 ## Read a screen's own id
 
 **The bug:** a mirrored `currentUserId` provider, or id threaded through every constructor — two sources of truth that drift.
@@ -226,9 +228,13 @@ final text = Query.of<String>(context, _View.text); // read ONE key — rebuilds
 final search = context.on(.search.query({.sort(.recent)}));  // SearchView? (null off search / when sort ≠ recent)
 // rebuilds when `sort` changes value or search (de)foregrounds — never on unrelated nav or other keys;
 // no change to a watched value → no rebuild
+
+// global, across screens: a flag read anywhere on the stack — true while ANY
+// editor is dirty. Backs a close-guard; rebuilds only when a `dirty` flips.
+final unsaved = context.at(.query({.dirty})) != null;
 ```
 
-`context.on` is the foreground read, `context.at` the same anywhere on the stack; a placement-less `On.query({...})` reads view-state **globally** across screens (e.g. a close-guard: `context.at(.query({.dirty}))`). `Screen.ownerOf(context)` / `isForegroundOf(context)` read this widget's own placement, reactively.
+`context.on` is the foreground read, `context.at` the same anywhere on the stack; a placement-less `On.query({...})` reads view-state **globally** across screens (the close-guard above). `Screen.ownerOf(context)` / `isForegroundOf(context)` read this widget's own placement, reactively.
 
 ## State retention
 
@@ -246,6 +252,20 @@ Retention applies only to that root switch — a `popTo`/`go` to an ancestor *wi
 The id is a **value-witness**: write a codec and its `T` becomes the screen's static id type (`.uuid` ⇒ `String`). Type safety is that `T` — the codec itself is for **restoration and deep links**, a strict string ↔ `T` round-trip whose `decode` returns `null` to reject malformed input (it validates the *string form*, it doesn't add a finer static type):
 
 `.string .raw .uuid .username .email .integer .number .date .enumValues(...) .record2/.record3(...) .csv(...)` — or any `const` class implementing `Codec<T>`.
+
+## Build a shareable link
+
+The inverse of the resolver: every screen is also a deep link, and the typed builder turns a route into a URL with `.toUri()` — no string-building, every id checked by its codec.
+
+```dart
+Link.home.user('u1').toUri()                 // /home/user/u1 — address it the way you'd navigate
+Link.editPost('p1').toUri()                  // /profile/post/p1/edit-post — jump straight to an
+                                             //   unambiguous screen; the one id back-fills its path
+Link.search.query({.text('shoes')}).toUri()  // /search?text=shoes — view-state rides the SAME
+                                             //   dot-shorthand set as Screen.on, minus .not
+```
+
+`WidgetLink.<route>` is the nav tree (every renderable screen); a `.link` branch adds **resolve-only** leaves on `WidgetlessLink.<route>` (`/<username>` → `username`, no screen yet); `Link.<route>` is both.
 
 ## Host & lifecycle
 
@@ -275,12 +295,12 @@ Screen.restore(snap);                                  // best-effort; truncates
 
 The boot widget itself reads `Screen.initialUrl` (the launch link, parsed) only to **tailor the loading UI** — e.g. show a profile skeleton when the app opened on a user link — while the resolver does the actual navigating.
 
-**Scope:** canon owns an in-memory stack and system back — it's an app router that also mirrors the active path and view-state into the URL (`?query`/`#fragment`, historyless) and parses inbound links from the grammar's `.link` branches. Full browser back/forward history sync is in progress. `canon_link` remains the standalone, **Flutter-free** URL ↔ sealed-`Link` codec for non-Flutter consumers.
+**Scope:** canon owns an in-memory stack and system back — it's an app router that also mirrors the active path and view-state into the URL (`?query`/`#fragment`, historyless), builds shareable links with `.toUri()`, and parses inbound ones from the grammar's `.link` branches. Full browser back/forward history sync is in progress. `canon_link` remains the standalone, **Flutter-free** URL ↔ sealed-`Link` codec for non-Flutter consumers.
 
 ## Guarantees
 
 - **Compile-time:** illegal targets, missing/mistyped ids, and back-at-root aren't expressible — the methods don't exist or don't type-check.
-- **Build-time validation:** one owner per screen name; every declaration of a name agrees on id type; `inherit` must target a real ancestor with a matching id type; `keep`/`forget` must genuinely flip retention.
+- **Build-time validation:** one owner per screen name; every declaration of a name agrees on id type; `inherit` must target a real ancestor with a matching id type; `keep`/`forget` must genuinely flip retention; a name is a screen *or* a `.link` branch at a given position, never both; redundant forms are rejected — a bare leaf (`X`, not `X()`), and no empty `slots({})` (a screen is already linkable by its id).
 - **Runtime:** a placement's verbs are edge-required — they throw on a stale-invalid edge rather than silently teleporting. The engine's raw `go`/`pop` are `@internal`; the typed verbs are the only navigation surface.
 - **Drift check:** `assert(Screen.isCodegenFresh)` in a test fails if codegen and the live tree diverge.
 
@@ -296,4 +316,4 @@ dev_dependencies:
   build_runner: any
 ```
 
-`dart run build_runner build` generates the typed `Screen` facade — typed nav, URL mirror + `.link` ingress, and view-state, all from the one grammar.
+`dart run build_runner build` generates the typed `Screen` facade — typed nav, URL mirror, `.link` ingress + `.toUri()` link builders, and view-state, all from the one grammar.
