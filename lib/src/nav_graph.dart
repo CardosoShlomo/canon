@@ -686,6 +686,7 @@ final class NavGraph {
     return () => _navListeners.remove(fn);
   }
 
+
   Navigation _buildNavigation(
           List<StackEntry> fromStack, List<StackEntry> toStack, CommitMode mode) =>
       Navigation(
