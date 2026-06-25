@@ -33,16 +33,23 @@ enum _Screens with ScreenNode<_Screens> {
     user.stacked,                    // tap a follower → another profile, fresh frame
   });
 
-  static final graph = NavGraph<InitialScreen>({
+  static final graph = NavGraph({
     home.keep({ _user() }),
-    search.keep({ _user(), comment }),
-    messages.keep({ thread({ _user() }) }),
+    search.keep({ _user(), comment })
+      .query({ _View.text(.string), _View.sort(.enumValues(SortBy.values)) }),  // URL ?text=&sort= — historyless mirror
+    messages.keep({ thread({ _user() }).fragment({ _View.at(.uuid) }) }),       // URL #at=<msgId> — a scroll anchor
     profile.keep({
-      post({ editPost.inherit(post), comment }),  // here, editPost's id is always this post's
+      // editPost's id is always this post's; `dirty` is a shared flag (any editor
+      // can mirror it) → a global close-guard can ask "is anything unsaved?"
+      post({ editPost.inherit(post).query({ _View.dirty }), comment }),
       settings,
     }),
-  }, initial: .home);
+    user.link({ slots({.username}) }),            // /<username> — a shareable deep link → user
+  }, initial: const SplashScreen());              // boot UI, until the resolver commits the first screen
 }
+
+// View-state keys (the URL `?query` / `#fragment`) — a QueryKeyBase enum, `key(codec)`.
+enum _View with QueryKeyBase { text, sort, at, dirty }
 ```
 
 A row is `name(WidgetConst())` or `name(WidgetConst(), idCodec)`. One library-private `@screens` enum, one `NavGraph`, `part 'screen.nav.dart';` — that's the whole grammar. Codegen turns this tree into a typed `Screen` facade whose methods *are* its edges. Read this section and you've read the app's navigation; everything below maps to a line in it.
@@ -88,6 +95,8 @@ Screen.on(.user(id))?.goPost(postId);            // .user(id) pins one occurrenc
 Screen.goHome().goUser(authorId).goPost(postId); // chain disambiguates: post lands under THAT user
 ```
 
+**Atomic** — a chain written in one expression commits as a **single** transition: one diff against the live stack, one animation. Entries that still match (same screen **and** id) are **reused, not rebuilt**, so the chain changes only what actually differs. That's why `Screen.at(.home)?.goSettings()` *pops what's above home and reuses the rest* — a minimal jump, never a teardown-and-recreate — and why a `surface()`-then-`go` reads as a single declarative "end up here."
+
 **Broad reach** — a kick-start's reach extends inward: a *single-placement* id screen gets its `goX(id)` on every ancestor whose path down to it crosses no unrelated id screen (id-free intermediates auto-fill), so an ancestor jumps straight to a descendant supplying just the one id it needs. (`post` is multi-placement, so there's no broad `goPost` — only the direct-child edge above; `editPost` below is the real broad-reach case.)
 
 ## Inherit: an id that's provably the parent's
@@ -127,7 +136,7 @@ A profile links to other profiles, and a post links back to its author. Two dist
 Cyclic screens expose `depth` (live occurrence count); `.depth(n)` pins one:
 
 ```dart
-if (Screen.at case HomeUserNav(:final depth)) { ... }   // how deep in the chain
+if (Screen.current case HomeUserNav(:final depth)) { ... }   // how deep in the chain
 Screen.on(.user.depth(2))?.popToUser();                 // act on a specific occurrence
 ```
 
@@ -140,7 +149,7 @@ final landed = Screen.pop();        // null at a root
 switch (landed?.at) { /* one case per non-leaf placement — exhaustive */ }
 ```
 
-`Screen.on(...)`, `Screen.at`, and every move return a **placement** — a typed `…Nav` like `ThreadNav` or `HomeUserNav`. It's a transient cursor: each move returns the **next** placement and you step from that.
+`Screen.on(...)`, `Screen.current`, and every move return a **placement** — a typed `…Nav` like `ThreadNav` or `HomeUserNav`. It's a transient cursor: each move returns the **next** placement and you step from that.
 
 ```dart
 Screen.goThread(threadId).goUser(userId);   // chain off each returned placement
@@ -162,24 +171,31 @@ thread.goUser(userId);                       // throws IF user is no longer a li
 
 Where a screen has 2+ children or ancestors, `go(Hop.x)` / `popTo(Pop.x)` take a ternary for dynamic branching — `go(busy ? Hop.user(a) : Hop.comment(c))` — returning the least-common placement type; chain off a named verb when you need a specific one.
 
-## Inspect position — typed, exhaustive
+## Inspect & reach a position — typed, exhaustive
 
 **The bug:** `"is route X active?"` by string/regex compare.
 
-**Foreclosed:** `Screen.at` is the exact current placement (never null). `Screen.on(.user)` is the **union** of `user`'s placements, `null` when inactive; `.at` narrows it to a sealed switch — a new placement you forget to handle **won't compile**:
+**Foreclosed:** `Screen.current` is the exact foreground placement (never null), a sealed `AnyPlacement` you switch exhaustively. `Screen.on(.user)` is `user`'s placement **if it's the front**, else `null` — and it's already the typed placement, so a placement you forget to handle **won't compile**:
 
 ```dart
-if (Screen.at case HomeUserNav n) ...           // exact current placement
+if (Screen.current case HomeUserNav n) ...      // exact front placement
 
-switch (Screen.on(.user)?.at) {        // no default — add a placement and this won't compile
+switch (Screen.on(.user)) {            // no default — add a placement and this won't compile
   case HomeUserNav():            ...
   case SearchUserNav():          ...
   case MessagesThreadUserNav():  ...
-  case null:                     ...   // not on a user
+  case null:                     ...   // user is not the front
 }
 ```
 
-`.under` steps one level outward; `Screen.stack` exposes `.current`, `.currentId`, `.screens`, `.reachable`, and `.tab` (the active root — the bottom of the stack).
+`Screen.on(.x)` is **front-only**; `Screen.at(.x)` reaches a placement **anywhere on the live stack** — front *or* buried. On it, `surface()` brings it to the front (a no-op if it already is), and `goX()` is a **smart jump** — pop back to it, then navigate, as one atomic diff:
+
+```dart
+Screen.at(.user(id))?.surface();       // bring that user up (no-op if already front)
+Screen.at(.home)?.goSettings();        // jump back to home, then settings — one diff
+```
+
+`Screen.stack` exposes `.current`, `.currentId`, `.screens`, `.reachable`, and `.tab` (the active root — the bottom of the stack).
 
 ## Read a screen's own id
 
@@ -193,6 +209,26 @@ context.idOf(.home);                  // compile error — home has no id
 ```
 
 No `InheritedWidget`, no mirror, no route-param threading. (When one widget backs 2+ id-bearing screens, codegen emits a sealed `Screen.<widget>Id(context)` resolver you switch exhaustively — not needed in this tree.)
+
+## View-state: typed URL query/fragment, reactive
+
+`search.query({...})` / `thread.fragment({...})` declare **screen-local view-state** — nullable, typed, mirrored into the URL's `?query` / `#fragment` as a *historyless* replace (it never floods back-history). Write it through the placement; read it surgically in a widget:
+
+```dart
+Screen.on(.search)!.query.sort = .recent;          // write — mirrors to ?sort=recent
+
+final text = Query.of<String>(context, _View.text); // read ONE key — rebuilds ONLY when `text` changes
+```
+
+`Query.of` / `Fragment.of` are fine-grained: a widget watching a key rebuilds only when *that* key changes — selection rebuilds with no provider/selector boilerplate. `context.on(.x)` reads the typed view through the placement reactively, **subscribing only to the keys (and foreground) the selector references**:
+
+```dart
+final search = context.on(.search.query({.sort(.recent)}));  // SearchView? (null off search / when sort ≠ recent)
+// rebuilds when `sort` changes value or search (de)foregrounds — never on unrelated nav or other keys;
+// no change to a watched value → no rebuild
+```
+
+`context.on` is the foreground read, `context.at` the same anywhere on the stack; a placement-less `On.query({...})` reads view-state **globally** across screens (e.g. a close-guard: `context.at(.query({.dirty}))`). `Screen.ownerOf(context)` / `isForegroundOf(context)` read this widget's own placement, reactively.
 
 ## State retention
 
@@ -222,9 +258,24 @@ final snap = Screen.snapshot();                        // manual snapshot
 Screen.restore(snap);                                  // best-effort; truncates at first illegal edge
 ```
 
-`NavGraph` takes a required typed `initial:` (e.g. `initial: .profile.settings`), optional `pageOf` (defaults to `MaterialPage`), and optional `observers`. Mount another enum's screen family with `graft(Other.tree())`.
+`NavGraph` takes a required `initial:` **boot widget** (a splash, shown until the first real screen commits), optional `pageOf` (defaults to `MaterialPage`), and optional `observers`. Mount another enum's screen family with `graft(Other.tree())`.
 
-**Scope:** canon owns an in-memory stack and system back — it's an app router. It does not sync the browser URL bar or history; inbound deep links come through `canon_link`, and web address-bar sync is out of scope for now.
+**Cold start & deep links.** `initial:` is a boot widget shown until the first screen commits. Two listeners drive the rest:
+
+- a **link resolver** turns every incoming link — the launch URL *and* runtime deep links — into navigation. The grammar's `.link` branches parse each to a typed `Link`, which you `switch` to a `goX`; the first commit out of boot **auto-replaces** the splash, leaving no history:
+
+  ```dart
+  switch (link) {                          // resolver — handles the initial link AND later ones alike
+    case UserLink(:final username): Screen.goUser(username);
+    case null:                      Screen.goHome();       // no/unknown link → default
+  }
+  ```
+
+- the **navigations stream** (`Screen.navigations` / `Screen.observe`) fires after each commit with the **source and destination stacks** — diff them for transitions, analytics, or restoration.
+
+The boot widget itself reads `Screen.initialUrl` (the launch link, parsed) only to **tailor the loading UI** — e.g. show a profile skeleton when the app opened on a user link — while the resolver does the actual navigating.
+
+**Scope:** canon owns an in-memory stack and system back — it's an app router that also mirrors the active path and view-state into the URL (`?query`/`#fragment`, historyless) and parses inbound links from the grammar's `.link` branches. Full browser back/forward history sync is in progress. `canon_link` remains the standalone, **Flutter-free** URL ↔ sealed-`Link` codec for non-Flutter consumers.
 
 ## Guarantees
 
@@ -245,4 +296,4 @@ dev_dependencies:
   build_runner: any
 ```
 
-`dart run build_runner build` generates the typed `Screen` facade. For deep links, add **canon_link** — a strict URL ↔ sealed `Link` codec built from the same grammar.
+`dart run build_runner build` generates the typed `Screen` facade — typed nav, URL mirror + `.link` ingress, and view-state, all from the one grammar.
