@@ -723,6 +723,13 @@ final class NavGraph {
   /// The full multi-scope nav state as a restoration-serializable tree (only
   /// primitives/Lists/Maps), keyed by screen NAME with each id encoded via the
   /// screen's own codec (`ScreenNodeBase.id`). Pairs with [restore].
+  // TODO(web): add a monotonic history index here ('i': _historyIndex++) and read
+  // it back in `restore`/`setNewRoutePath`. The blob is truth, but with no index
+  // we cannot tell a BACK landing from a FORWARD one, nor detect a bfcache restore
+  // (browser serving a cached page without a fresh setNewRoutePath). The index lets
+  // the delegate diff prev-vs-incoming to classify the transition and to no-op a
+  // redundant report. Bump on every commit; persist in the blob so it survives
+  // refresh. Only meaningful on web — verify with a live back/forward + bfcache run.
   Map<String, Object?> toState() => {
         'v': structureSignature, // stale-graph guard: reject restore on mismatch
         'active': _activeRoot.name,
@@ -1041,6 +1048,22 @@ final class NavGraph {
     return _nav;
   }
 
+  /// Pop the pending sim back to [until] if it's buried — a NO-OP when it's
+  /// already the front. Sim-aware (batch-safe), so the generated smart verb
+  /// `at(.x)?.goChild()` (pop-to-self-if-needed, then go) batches into one diff.
+  @internal
+  Nav popTo(Enum until) {
+    final sim = _ensureSim();
+    if (sim.stack.isNotEmpty && sim.stack.last.screen == until) return _nav;
+    final res = resolvePop(sim.stack, until);
+    if (res == null) {
+      _sim = null;
+      throw StateError('popTo(${until.name}) — not reachable on the live stack');
+    }
+    _apply(sim, res);
+    return _nav;
+  }
+
   /// Frees a parked [keep]: cuts the keep and everything above it from its tab's
   /// stack, leaving the legal prefix below (or the bare root). Throws if the keep
   /// isn't mounted, or if it's in the currently active stack — forget is
@@ -1213,6 +1236,17 @@ final class NavDelegate extends RouterDelegate<Object>
   /// Reported to the platform after each commit → the browser URL bar. The
   /// `state` is the blob ([toState]) — TRUTH for back/forward/refresh; the `uri`
   /// is the derived lossy nav-mirror, self-sufficient only on blob-null cold-load.
+  //
+  // TODO(web): honor history REPLACE mode. A commit flagged
+  // `Navigation.mode == replace` (Screen.replace.*, and the first-commit-out-of-
+  // boot) must REPLACE the browser entry, not push one — else the loading screen
+  // and below-screen view-state writes leak history entries (the stale-blob bug
+  // this design closes structurally only once the report side cooperates).
+  // Framework `currentConfiguration` always pushes; the fix is to drive the report
+  // directly: `SystemNavigator.routeInformationUpdated(uri:, state:, replace:)`
+  // with `replace` = the last committed mode. Expose that mode off the graph (a
+  // `lastCommitMode` set in `_consumeReplace`/`go`) and call it from `_refresh`.
+  // Verify on a real web build (the `replace` arg is a no-op off-web).
   @override
   RouteInformation get currentConfiguration => RouteInformation(
         uri: Uri.parse(_graph.currentUrl()),
