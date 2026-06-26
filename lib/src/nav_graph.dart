@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show MaterialPage;
+import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart';
 
@@ -498,8 +499,12 @@ final class NavGraph {
     if (root == null) return null;
     final uri = Uri.tryParse(url);
     if (uri == null) return null;
-    final linkSpec = LinkSpec([DomainNode('${uri.scheme}://${uri.host}', root)]);
-    return LinkMatcher(linkSpec).parse(url);
+    // The domain is derived from the url itself (host is captured, not matched),
+    // so it self-matches. A path-only boot/deep-link url ("/item/me") has no
+    // scheme/host — an empty prefix yields an empty-scheme/host domain that the
+    // matcher compares structurally, instead of `Uri.parse('://')` throwing.
+    final prefix = uri.hasScheme ? '${uri.scheme}://${uri.host}' : '';
+    return LinkMatcher(LinkSpec([DomainNode(prefix, root)])).parse(url);
   }
 
   /// Encodes a link's [template] (e.g. `user/*`) + ordered slot [values] (and,
@@ -587,6 +592,39 @@ final class NavGraph {
   /// The cold-start URL, set by the web Router before first frame; the generated
   /// `Screen.initialUrl` parses it to a typed `Link?`. Null off the web / warm.
   String? bootUrl;
+
+  /// THE navigation resolver (one, lifetime), wired via the generated
+  /// `Screen.resolver = (Link? link) {…}`. Every external link — cold-start web
+  /// URL or mobile deep-link, both delivered through [NavDelegate.setNewRoutePath]
+  /// — is handed here as a raw url; the generated setter parses it to a `Link?`.
+  void Function(String url)? _resolver;
+
+  /// A launch/deep-link url that arrived before a resolver was set — replayed
+  /// once when [setResolver] is called. Consume-once: cleared on replay so N
+  /// re-assignments never re-fire the same launch link.
+  String? _pendingUrl;
+
+  /// The history mode of the last commit — `replace` (Screen.replace.* and the
+  /// first commit out of boot) reports a browser history REPLACE so the loading
+  /// screen / redirects leave no entry; `push` adds one. Read in [NavDelegate].
+  CommitMode _lastCommitMode = .push;
+
+  /// True while applying a browser-initiated route change (back/forward/refresh
+  /// restore). The commit must NOT report back to the platform — the browser
+  /// already moved within its own history; re-reporting would wipe the forward
+  /// stack. Set around [restore] in [NavDelegate.setNewRoutePath].
+  bool _suppressReport = false;
+
+  /// Installs the single resolver (last-wins) and replays the pending launch url
+  /// once, if one arrived first. Never disposed — lives the app lifetime.
+  void setResolver(void Function(String url) fn) {
+    _resolver = fn;
+    final pending = _pendingUrl;
+    if (pending != null) {
+      _pendingUrl = null;
+      fn(pending);
+    }
+  }
 
   /// Per-screen view-state schema (`screen(...).query/.fragment`): key → codec
   /// (null = flag), split into the query and fragment URL parts.
@@ -885,23 +923,39 @@ final class NavGraph {
   /// (`/account/42`, `/home/settings/about`). Lossy (parked tabs aren't in it) but
   /// cold-start-capable. `/` while booting. The web Router reports this to the bar.
   String currentUrl() {
+    final slots = _activeScope.slots;
+    final top = slots.last.entry;
+    // While booting (Initial), the URL is the pending launch URL the user
+    // arrived on — not '/'. The resolver hasn't committed yet; keep what the
+    // browser shows so the loading screen reflects where you're headed.
+    if (top.screen == BootScreen.initial) return bootUrl ?? '/';
+    // The URL mirrors the TOP screen's forward grammar path (+ ids), NOT the raw
+    // stack: back-edges (.stacked/.cycled) add stack DEPTH, never URL segments.
+    // Walk the top's resolved parent chain (root→top); each id comes from the
+    // deepest stack entry instantiating that spine node (so back-edge depth and
+    // sibling-stacked instances below the spine drop out — `[a,b,a]` → `/a`).
+    final spine = <GrammarNode>[];
+    for (GrammarNode? n = top.node.resolved; n != null; n = n.parent) {
+      spine.insert(0, n);
+    }
     final parts = <String>[];
-    for (final slot in _activeScope.slots) {
-      final e = slot.entry;
-      if (e.screen == BootScreen.initial) continue;
-      parts.add(_urlKebab(e.screen.name));
-      final codec = (e.screen as ScreenNodeBase).id;
+    for (final node in spine) {
+      parts.add(_urlKebab(node.screen.name));
+      final codec = (node.screen as ScreenNodeBase).id;
       // Inherited segments are bare — their id already rode the source segment.
-      if (codec != null && e.id != null && e.node.inheritsFrom == null) {
-        parts.add(codec.encode(e.id));
+      if (codec != null && node.inheritsFrom == null) {
+        Object? id;
+        for (final s in slots) {
+          if (s.entry.node.resolved == node) id = s.entry.id;
+        }
+        if (id != null) parts.add(codec.encode(id));
       }
     }
     final base = '/${parts.join('/')}';
     // The active top's view-state mirrors into ?query / #fragment.
-    final top = _activeScope.slots.last.entry.screen;
-    final schema = _viewSchema[top];
-    final q = schema == null ? '' : _encodeView(top, schema.query);
-    final f = schema == null ? '' : _encodeView(top, schema.fragment);
+    final schema = _viewSchema[top.screen];
+    final q = schema == null ? '' : _encodeView(top.screen, schema.query);
+    final f = schema == null ? '' : _encodeView(top.screen, schema.fragment);
     return base + (q.isEmpty ? '' : '?$q') + (f.isEmpty ? '' : '#$f');
   }
 
@@ -1023,6 +1077,16 @@ final class NavGraph {
     assert(
         id != null || null is T || T == Never, '"${screen.name}" requires an id');
     final sim = _ensureSim();
+    // Idempotent: going to the current top with the same id is a no-op — no
+    // commit, no history entry, no rebuild (so re-tapping the active tab does
+    // nothing). Checked before consuming any replace flag so a chain's later
+    // segment still sees it. Boot is excluded — the first commit must run.
+    if (sim.active != BootScreen.initial &&
+        sim.stack.isNotEmpty &&
+        sim.stack.last.screen == screen &&
+        sim.stack.last.id == id) {
+      return _nav;
+    }
     _consumeReplace(sim);
     final target = screen;
     if (sim.active == BootScreen.initial) {
@@ -1179,6 +1243,7 @@ final class NavGraph {
     _scopeOf(_activeRoot);
     final toEntry = _activeScope.slots.last.entry;
     if (!identical(fromEntry, toEntry)) {
+      _lastCommitMode = sim.mode;
       final nav = _buildNavigation(
           fromStack, [for (final s in _activeScope.slots) s.entry], sim.mode);
       for (final fn in [..._navListeners]) {
@@ -1276,25 +1341,12 @@ final class NavDelegate extends RouterDelegate<Object>
     );
   }
 
-  /// Reported to the platform after each commit → the browser URL bar. The
-  /// `state` is the blob ([toState]) — TRUTH for back/forward/refresh; the `uri`
-  /// is the derived lossy nav-mirror, self-sufficient only on blob-null cold-load.
-  //
-  // TODO(web): honor history REPLACE mode. A commit flagged
-  // `Navigation.mode == replace` (Screen.replace.*, and the first-commit-out-of-
-  // boot) must REPLACE the browser entry, not push one — else the loading screen
-  // and below-screen view-state writes leak history entries (the stale-blob bug
-  // this design closes structurally only once the report side cooperates).
-  // Framework `currentConfiguration` always pushes; the fix is to drive the report
-  // directly: `SystemNavigator.routeInformationUpdated(uri:, state:, replace:)`
-  // with `replace` = the last committed mode. Expose that mode off the graph (a
-  // `lastCommitMode` set in `_consumeReplace`/`go`) and call it from `_refresh`.
-  // Verify on a real web build (the `replace` arg is a no-op off-web).
+  /// Null disables the framework's auto-report (which always PUSHES). [_refresh]
+  /// drives the report directly instead, so it can honor history REPLACE mode —
+  /// the first commit out of boot and `Screen.replace.*` replace the browser
+  /// entry rather than leaking one (the loading screen / redirect history bug).
   @override
-  RouteInformation get currentConfiguration => RouteInformation(
-        uri: Uri.parse(_graph.currentUrl()),
-        state: _graph.toState(),
-      );
+  RouteInformation? get currentConfiguration => null;
 
   /// Cold-load / back / forward / refresh land here. Blob present (back/forward/
   /// refresh) → restore it (truth). Blob absent (pasted/external cold URL) → the
@@ -1305,19 +1357,44 @@ final class NavDelegate extends RouterDelegate<Object>
     if (configuration is RouteInformation) {
       final state = configuration.state;
       if (state is Map<String, Object?>) {
+        // Blob present (back/forward/refresh) → restore the nav-mirror (truth).
+        // Browser-initiated: suppress the report so the forward stack survives.
+        _graph._suppressReport = true;
         _graph.restore(state);
+        _graph._suppressReport = false;
       } else {
-        // Cold-load: record the URL so the resolver can read `Screen.initialUrl`
-        // (a declared LINK), then reconcile the nav-mirror. A link URL won't match
-        // `applyUrl` (no mutation) → the app stays at `Initial` for the resolver.
-        if (_graph._booting) _graph.bootUrl = configuration.uri.toString();
-        _graph.applyUrl(configuration.uri.toString());
+        // Blob absent = an EXTERNAL link: a cold-start web URL or a mobile
+        // deep-link (Flutter routes both here). Record it for `Screen.initialUrl`
+        // and hand it to the single resolver — which writes `Screen.goX()`. With
+        // no resolver installed, fall back to the nav-mirror reconcile.
+        final url = configuration.uri.toString();
+        if (_graph._booting) _graph.bootUrl = url;
+        if (_graph._resolver != null) {
+          _graph._resolver!(url);
+        } else {
+          // No resolver installed: stash the launch url for one set later, and
+          // keep the legacy nav-mirror reconcile (a declared link is a no-op).
+          if (_graph._booting) _graph._pendingUrl = url;
+          _graph.applyUrl(url);
+        }
       }
     }
     return SynchronousFuture(null);
   }
 
-  void _refresh() => notifyListeners();
+  void _refresh() {
+    // Drive the platform report directly so a REPLACE commit (first-out-of-boot,
+    // Screen.replace.*) replaces the browser history entry instead of pushing.
+    // No-op off the web; the `state` blob is TRUTH for back/forward/refresh.
+    if (kIsWeb && !_graph._booting && !_graph._suppressReport) {
+      SystemNavigator.routeInformationUpdated(
+        uri: Uri.parse(_graph.currentUrl()),
+        state: _graph.toState(),
+        replace: _graph._lastCommitMode == CommitMode.replace,
+      );
+    }
+    notifyListeners();
+  }
 }
 
 /// Parses incoming browser [RouteInformation] for the Router. Pass-through: the

@@ -1,3 +1,10 @@
+## 0.17.0
+
+- Single navigation resolver: external URLs / deep-links (web address bar + mobile app-links) route through one resolver via `setNewRoutePath`, with a consume-once cold-start replay.
+- Web history honors REPLACE mode (first-commit-out-of-boot + `Screen.replace.*`), restores back/forward silently (forward stack preserved), and makes re-navigating to the current top an idempotent no-op.
+- URL mirrors the TOP screen's forward grammar path only — `.stacked`/`.cycled` back-edges add stack depth (blob), never URL segments.
+- `parseLink` accepts path-only URLs instead of throwing; the boot URL is captured eagerly for `Screen.initialUrl`.
+
 ## 0.16.0
 
 - Reactive, surgical view-state reads: `context.on` / `context.at` and `Query.of` / `Fragment.of` rebuild only on the keys they reference.
