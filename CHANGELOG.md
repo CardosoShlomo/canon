@@ -1,3 +1,11 @@
+## 0.16.0
+
+- Reactive, surgical view-state reads: `context.on` / `context.at` and `Query.of` / `Fragment.of` rebuild only on the keys they reference.
+- Sealed `AnyPlacement` foundation for `Screen.current` / `on` / `at` and `surface()`.
+- Nav-mirror + link URL building: new `encodeNavUrl`, and `encodeLink` now carries `?query` / `#fragment`.
+- Widget-form link id leads its union (`[id, …declared]`).
+- Sim-safe `popTo`; screen lifecycle callbacks removed. Requires `canon_codec ^0.1.3`.
+
 ## 0.15.1
 
 - Docs: `Screen.go(Hop)` returns a `KickstartNav` (`.at` narrows to the landed target) as of canon_generator 0.19.0.
