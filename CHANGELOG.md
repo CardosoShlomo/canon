@@ -1,3 +1,7 @@
+## 0.18.1
+
+- README: sharpen positioning and document the unified web/mobile model — `Screen.manager`, the `Url`→`Place`/`Link`/`RootUrl` resolver, and `url.domain`.
+
 ## 0.18.0
 
 - Full browser back/forward history on web: multi-entry History API, refresh-survival, and a floor model with returnable (`anchor`) vs bounce-exit (`passthrough`) roots.
