@@ -4,6 +4,8 @@ Compile-safe Flutter navigation generated from **one grammar tree**. The transit
 
 Built for the AI-authorship era: a machine can only emit legal navigation, and a human audits the **entire nav space** at a glance in one small spec.
 
+One grammar, both ends: it drives identical navigation on mobile and the web — typed deep links, view-state mirrored to the URL, and real browser back/forward that survives a refresh. The compile-time closed nav space is the part no other router has; the web fidelity is table stakes, done right.
+
 ## The whole app, on one screen
 
 ```dart
