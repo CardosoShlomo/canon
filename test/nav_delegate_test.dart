@@ -37,8 +37,8 @@ class _Label extends StatelessWidget {
   }
 }
 
-// A raw InitialScreenBase for engine tests (the typed surface is generated).
-class _Init implements InitialScreenBase {
+// A raw RootScreenBase for engine tests (the typed surface is generated).
+class _Init implements RootScreenBase {
   const _Init(this.chain);
   @override
   final List<(Enum, Object?)> chain;
@@ -89,7 +89,7 @@ enum K with ScreenNode<K> {
       );
 }
 
-class _InitK implements InitialScreenBase {
+class _InitK implements RootScreenBase {
   const _InitK(this.chain);
   @override
   final List<(Enum, Object?)> chain;
@@ -102,7 +102,7 @@ void main() {
     return graph;
   }
 
-  testWidgets('renders the initial root', (tester) async {
+  testWidgets('renders the root root', (tester) async {
     await pump(tester);
     expect(find.text('home:'), findsOneWidget);
   });
@@ -202,7 +202,7 @@ void main() {
     expect(graph.stack.length, 1);
   });
 
-  testWidgets('initial seeds a multi-entry starting stack', (tester) async {
+  testWidgets('root seeds a multi-entry starting stack', (tester) async {
     final graph = NavGraph(
       {N.home.keep({N._profile()}), N.feed()},
       seedChain: const _Init([(N.home, null), (N.profile, 'p')]),

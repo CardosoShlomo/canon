@@ -107,7 +107,7 @@ final class _Graft<S> extends TreeNode<S> {
   final Enum screen;
 }
 
-/// A link-grammar branch placed in the tree (a root, or nested in a `.call`).
+/// A link-grammar branch placed in the tree (a trunk, or nested in a `.call`).
 /// It is GENERATOR-READ ONLY: the runtime nav engine ignores it (links don't
 /// seed the stack). Carries the link DSL node the generator walks to emit `Link`.
 final class LinkBranch<S> extends TreeNode<S> {
@@ -253,24 +253,24 @@ TreeNode<P> graft<P, C>(TreeNode<C> child) {
 /// The validated grammar: canonical placements, kinds, and the legality oracle.
 @internal
 final class NavSpec {
-  NavSpec(Set<TreeNode> rootScreens) {
+  NavSpec(Set<TreeNode> trunkScreens) {
     try {
-      for (final root in rootScreens) {
-        if (root is LinkBranch) continue; // generator-read only, not a nav root
-        if (root is _BackEdge) {
+      for (final trunk in trunkScreens) {
+        if (trunk is LinkBranch) continue; // generator-read only, not a nav trunk
+        if (trunk is _BackEdge) {
           throw StateError(
-              'a back-edge (${root.screen}.${root.collapse ? 'cycled' : 'stacked'}) '
-              'cannot be a root');
+              'a back-edge (${trunk.screen}.${trunk.collapse ? 'cycled' : 'stacked'}) '
+              'cannot be a trunk');
         }
-        final screen = root is _Graft ? root.screen : root as Enum;
-        roots.add(_takeStash(screen) ?? GrammarNode(screen));
+        final screen = trunk is _Graft ? trunk.screen : trunk as Enum;
+        trunks.add(_takeStash(screen) ?? GrammarNode(screen));
       }
       assert(_stash.isEmpty,
           'unclaimed grammar nodes ${_stash.join(', ')} — structured mentions '
           'that are not elements of their enclosing set');
       _canonicalize();
-      for (final root in roots) {
-        _index(root);
+      for (final trunk in trunks) {
+        _index(trunk);
       }
       _validate();
     } finally {
@@ -279,13 +279,13 @@ final class NavSpec {
     }
   }
 
-  final List<GrammarNode> roots = [];
+  final List<GrammarNode> trunks = [];
   final Map<Enum, GrammarNode> canonical = {};
   final Set<Enum> keeps = {};
   final Set<Enum> forgets = {};
 
-  /// Roots whose subtree contains a keep — i.e. tabs retained when parked.
-  final Set<Enum> retainingRoots = {};
+  /// Trunks whose subtree contains a keep — i.e. tabs retained when parked.
+  final Set<Enum> retainingTrunks = {};
   final Set<Enum> _againTargets = {};
   final Map<Enum, int> _placements = {};
 
@@ -303,8 +303,8 @@ final class NavSpec {
       }
     }
 
-    for (final root in roots) {
-      gather(root);
+    for (final trunk in trunks) {
+      gather(trunk);
     }
 
     final owners = <String, Enum>{};
@@ -331,8 +331,8 @@ final class NavSpec {
       }
     }
 
-    for (final root in roots) {
-      rewrite(root);
+    for (final trunk in trunks) {
+      rewrite(trunk);
     }
   }
 
@@ -352,7 +352,7 @@ final class NavSpec {
     // `live` is the inherited keep/forget state (default: not kept). keep flips
     // it on for the subtree, forget flips it off; a toggle that doesn't change
     // it is redundant — and redundancy is a generation/build error.
-    void check(GrammarNode node, Enum root, bool live) {
+    void check(GrammarNode node, Enum trunk, bool live) {
       node.resolved; // throws when an again has no ancestor
       if (node.keep) {
         if (live) {
@@ -360,7 +360,7 @@ final class NavSpec {
               'ancestor already keeps this region (need a forget between them)');
         }
         keeps.add(node.screen);
-        retainingRoots.add(root);
+        retainingTrunks.add(trunk);
         live = true;
       } else if (node.forget) {
         if (!live) {
@@ -371,21 +371,21 @@ final class NavSpec {
         live = false;
       }
       for (final child in node.children) {
-        check(child, root, live);
+        check(child, trunk, live);
       }
     }
 
-    for (final root in roots) {
-      check(root, root.screen, false);
+    for (final trunk in trunks) {
+      check(trunk, trunk.screen, false);
     }
   }
 
-  /// The root screen owning [screen]'s scope (its canonical chain's root).
-  Enum rootOf(Enum screen) => chainOf(screen).first.screen;
+  /// The trunk screen owning [screen]'s scope (its canonical chain's trunk).
+  Enum trunkOf(Enum screen) => chainOf(screen).first.screen;
 
-  /// Whether [root]'s tab is retained when parked (its subtree has a keep);
+  /// Whether [trunk]'s tab is retained when parked (its subtree has a keep);
   /// a keepless tab is dropped on leave, as before.
-  bool retains(Enum root) => retainingRoots.contains(root);
+  bool retains(Enum trunk) => retainingTrunks.contains(trunk);
 
   /// Whether [screen]'s placement stays live when its tab parks: its nearest
   /// keep/forget boundary (inclusive) is a keep. Default (no boundary) is not
@@ -405,7 +405,7 @@ final class NavSpec {
   bool isMulti(Enum screen) =>
       _againTargets.contains(screen) || (_placements[screen] ?? 0) > 1;
 
-  /// Canonical chain root..screen — the stack recipe for canonical navigation.
+  /// Canonical chain trunk..screen — the stack recipe for canonical navigation.
   List<GrammarNode> chainOf(Enum screen) {
     final node = canonical[screen];
     if (node == null) {
@@ -446,7 +446,7 @@ final class NavSpec {
       return '${n.screen.name}$flags(${kids.join(',')})';
     }
 
-    return ([for (final r in roots) ser(r)]..sort()).join(';');
+    return ([for (final r in trunks) ser(r)]..sort()).join(';');
   }
 }
 
@@ -470,7 +470,7 @@ final class NavEntry<T> {
   final Object? id;
 }
 
-/// A live navigation stack, root-first: the full record (screens + ids) plus
+/// A live navigation stack, trunk-first: the full record (screens + ids) plus
 /// derived views.
 final class NavStack<T> {
   const NavStack(this.entries);
@@ -483,10 +483,10 @@ final class NavStack<T> {
   /// The id of the top entry.
   Object? get currentId => entries.last.id;
 
-  /// The scope root — the tab this stack belongs to.
+  /// The scope trunk — the tab this stack belongs to.
   T get tab => entries.first.screen;
 
-  /// Every screen, root-first.
+  /// Every screen, trunk-first.
   List<T> get screens => [for (final e in entries) e.screen];
 
   /// Distinct screens, top-first — the legal popTo targets.

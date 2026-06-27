@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:canon/canon.dart';
 import 'package:test/test.dart';
 
-// A graph seeded with a boot widget starts at BootScreen.initial (the synthetic
+// A graph seeded with a boot widget starts at BootScreen.root (the synthetic
 // loading placement). The first navigation out of boot auto-replaces — the
 // loading screen leaves no history, so the resolver stays cold/warm-unaware.
 enum R with ScreenNode<R> {
@@ -13,7 +13,7 @@ enum R with ScreenNode<R> {
   Widget get widget => const SizedBox.shrink();
 }
 
-class _Init implements InitialScreenBase {
+class _Init implements RootScreenBase {
   const _Init(this.chain);
   @override
   final List<(Enum, Object?)> chain;
@@ -21,13 +21,13 @@ class _Init implements InitialScreenBase {
 
 NavGraph _boot() => NavGraph(
       {R.home(), R.feed()},
-      initial: const SizedBox.shrink(),
+      root: const SizedBox.shrink(),
       pageOf: (w, c, k) => MaterialPage(child: w),
     );
 
 void main() {
   test('seeds the synthetic boot placement', () {
-    expect(_boot().current, BootScreen.initial);
+    expect(_boot().current, BootScreen.root);
   });
 
   test('first commit out of boot is an auto-replace', () async {

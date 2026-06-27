@@ -45,7 +45,7 @@ enum _Screens with ScreenNode<_Screens> {
       settings,
     }),
     user.link({ slot(.username) }),               // /user/<username> — a shareable deep link → user
-  }, initial: const SplashScreen());              // boot UI, until the resolver commits the first screen
+  }, root: const SplashScreen());              // boot UI, until the resolver commits the first screen
 }
 
 // View-state keys (the URL `?query` / `#fragment`) — a QueryKeyBase enum, `key(codec)`.
@@ -123,7 +123,7 @@ assert(context.idOf(.editPost) == context.idOf(.post)); // inside editPost: alwa
 ```dart
 Screen.on(.parentOf.comment)?.goComment(id);
 Screen.on(.parentOf);                       // compile error — target mandatory
-Screen.on(.parentOf.home);                  // compile error — home is a root, it has no parent
+Screen.on(.parentOf.home);                  // compile error — home is a trunk, it has no parent
 ```
 
 ## Recursion: stacked vs cycled
@@ -142,10 +142,10 @@ Screen.on(.user.depth(2))?.popToUser();                 // act on a specific occ
 
 ## Back
 
-`Screen.canPop` is `null` iff you're at a root. `Screen.pop()` is sugar for `Screen.canPop?.pop()` — it pops if it can and returns where you landed (or `null` at a root), never throws. That destination is a union over every non-leaf placement (anywhere you could land), so narrow it with `.at`:
+`Screen.canPop` is `null` iff you're at a trunk. `Screen.pop()` is sugar for `Screen.canPop?.pop()` — it pops if it can and returns where you landed (or `null` at a trunk), never throws. That destination is a union over every non-leaf placement (anywhere you could land), so narrow it with `.at`:
 
 ```dart
-final landed = Screen.pop();        // null at a root
+final landed = Screen.pop();        // null at a trunk
 switch (landed?.at) { /* one case per non-leaf placement — exhaustive */ }
 ```
 
@@ -195,7 +195,7 @@ Screen.at(.user(id))?.surface();       // bring that user up (no-op if already f
 Screen.at(.home)?.goSettings();        // jump back to home, then settings — one diff
 ```
 
-`Screen.stack` exposes `.current`, `.currentId`, `.screens`, `.reachable`, and `.tab` (the active root — the bottom of the stack).
+`Screen.stack` exposes `.current`, `.currentId`, `.screens`, `.reachable`, and `.tab` (the active trunk — the bottom of the stack).
 
 Each reach has two forms. **`Screen.on`/`Screen.at`** read a placement *once* — to inspect or navigate. **`context.on`/`context.at`** are their reactive twins: the same selector, but they return the typed **view** and **rebuild the widget surgically** — only when a key the selector names (or the foreground) actually changes, never on unrelated nav. Two axes: `Screen.` vs `context.` = read-once vs reactive rebuild; `.on` vs `.at` = foreground vs anywhere on the stack. (`Screen.<screen>Of(context)` reads this widget's *own* placement.)
 
@@ -238,14 +238,14 @@ final unsaved = context.at(.query({.dirty})) != null;
 
 ## State retention
 
-`keep` / `forget` decide whether a scope's stack **survives leaving it for another root** (a kick-start to a different family) and coming back — build-time checked to actually flip inherited state, so a no-op annotation won't compile:
+`keep` / `forget` decide whether a scope's stack **survives leaving it for another trunk** (a kick-start to a different family) and coming back — build-time checked to actually flip inherited state, so a no-op annotation won't compile:
 
 ```dart
-home.keep({ _user() })   // jump to another root and back → home's stack is intact
+home.keep({ _user() })   // jump to another trunk and back → home's stack is intact
 child.forget()           // this subtree is dropped, rebuilt fresh on return
 ```
 
-Retention applies only to that root switch — a `popTo`/`go` to an ancestor *within* the scope pops the screens above as normal; they're gone.
+Retention applies only to that trunk switch — a `popTo`/`go` to an ancestor *within* the scope pops the screens above as normal; they're gone.
 
 ## Codecs (id types)
 
@@ -278,9 +278,9 @@ final snap = Screen.snapshot();                        // manual snapshot
 Screen.restore(snap);                                  // best-effort; truncates at first illegal edge
 ```
 
-`NavGraph` takes a required `initial:` **boot widget** (a splash, shown until the first real screen commits), optional `pageOf` (defaults to `MaterialPage`), and optional `observers`. Mount another enum's screen family with `graft(Other.tree())`.
+`NavGraph` takes a required `root:` **boot widget** (a splash, shown until the first real screen commits), optional `pageOf` (defaults to `MaterialPage`), and optional `observers`. Mount another enum's screen family with `graft(Other.tree())`.
 
-**Cold start & deep links.** `initial:` is a boot widget shown until the first screen commits. Two listeners drive the rest:
+**Cold start & deep links.** `root:` is a boot widget shown until the first screen commits. Two listeners drive the rest:
 
 - a **link resolver** turns every incoming link — the launch URL *and* runtime deep links — into navigation. The grammar's `.link` branches parse each to a typed `Link`, which you `switch` to a `goX`; the first commit out of boot **auto-replaces** the splash, leaving no history:
 
@@ -293,13 +293,13 @@ Screen.restore(snap);                                  // best-effort; truncates
 
 - the **navigations stream** (`Screen.navigations` / `Screen.observe`) fires after each commit with the **source and destination stacks** — diff them for transitions, analytics, or restoration.
 
-The boot widget itself reads `Screen.initialUrl` (the launch link, parsed) only to **tailor the loading UI** — e.g. show a profile skeleton when the app opened on a user link — while the resolver does the actual navigating.
+The boot widget itself reads `Screen.rootUrl` (the launch link, parsed) only to **tailor the loading UI** — e.g. show a profile skeleton when the app opened on a user link — while the resolver does the actual navigating.
 
 **Scope:** canon owns an in-memory stack and system back — it's an app router that also mirrors the active path and view-state into the URL (`?query`/`#fragment`, historyless), builds shareable links with `.toUri()`, and parses inbound ones from the grammar's `.link` branches. Full browser back/forward history sync is in progress. `canon_link` remains the standalone, **Flutter-free** URL ↔ sealed-`Link` codec for non-Flutter consumers.
 
 ## Guarantees
 
-- **Compile-time:** illegal targets, missing/mistyped ids, and back-at-root aren't expressible — the methods don't exist or don't type-check.
+- **Compile-time:** illegal targets, missing/mistyped ids, and back-at-trunk aren't expressible — the methods don't exist or don't type-check.
 - **Build-time validation:** one owner per screen name; every declaration of a name agrees on id type; `inherit` must target a real ancestor with a matching id type; `keep`/`forget` must genuinely flip retention; a name is a screen *or* a `.link` branch at a given position, never both; redundant forms are rejected — a bare leaf (`X`, not `X()`), and no empty `slots({})` (a screen is already linkable by its id).
 - **Runtime:** a placement's verbs are edge-required — they throw on a stale-invalid edge rather than silently teleporting. The engine's raw `go`/`pop` are `@internal`; the typed verbs are the only navigation surface.
 - **Drift check:** `assert(Screen.isCodegenFresh)` in a test fails if codegen and the live tree diverge.

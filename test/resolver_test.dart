@@ -15,7 +15,7 @@ enum R with ScreenNode<R> {
 
 NavGraph _boot() => NavGraph(
       {R.home(), R.feed()},
-      initial: const SizedBox.shrink(),
+      root: const SizedBox.shrink(),
       pageOf: (w, c, k) => MaterialPage(child: w),
     );
 

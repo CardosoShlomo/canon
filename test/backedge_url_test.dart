@@ -3,7 +3,7 @@ import 'package:canon/canon.dart';
 import 'package:test/test.dart';
 
 enum T with ScreenNode<T> { a, b; @override Widget get widget => const SizedBox.shrink(); }
-class _Init implements InitialScreenBase { const _Init(this.chain); @override final List<(Enum, Object?)> chain; }
+class _Init implements RootScreenBase { const _Init(this.chain); @override final List<(Enum, Object?)> chain; }
 NavGraph _mk() => NavGraph({ T.a({ T.b({T.a.stacked}) }) }, seedChain: const _Init([(T.a, null)]), pageOf: (w,c,k)=>MaterialPage(child:w));
 
 void main() {

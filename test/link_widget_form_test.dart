@@ -16,7 +16,7 @@ enum W with ScreenNode<W> {
   Codec<Object?>? get id => this == user ? Codec.uuid : null;
 }
 
-class _Init implements InitialScreenBase {
+class _Init implements RootScreenBase {
   const _Init(this.chain);
   @override
   final List<(Enum, Object?)> chain;

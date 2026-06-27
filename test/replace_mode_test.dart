@@ -12,7 +12,7 @@ enum R with ScreenNode<R> {
   Widget get widget => const SizedBox.shrink();
 }
 
-class _Init implements InitialScreenBase {
+class _Init implements RootScreenBase {
   const _Init(this.chain);
   @override
   final List<(Enum, Object?)> chain;

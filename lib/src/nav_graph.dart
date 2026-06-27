@@ -20,7 +20,7 @@ Page<void> _defaultPageOf(Widget widget, PageCtx ctx, LocalKey key) =>
 
 /// The shape of a committed navigation, derived from the active scope's stack
 /// delta: [forward] grew the stack, [backward] shrank it, [roundTrip] did both
-/// (a `popTo(...).go(...)` chain), [jump] switched scope/root (a kick-start).
+/// (a `popTo(...).go(...)` chain), [jump] switched scope/trunk (a kick-start).
 enum NavDirection { forward, backward, roundTrip, jump }
 
 /// How a committed navigation maps to history: [push] adds a new entry,
@@ -64,10 +64,10 @@ final class Navigation {
 
   // Everything below is DERIVED from [from]/[to] — no stored state. Entries
   // compare by value `(screen, id)`, so a cycle's repeated frame is handled.
-  bool get _sameRoot => from.first.$1 == to.first.$1;
+  bool get _sameTrunk => from.first.$1 == to.first.$1;
 
   late final int _common = () {
-    if (!_sameRoot) return 0;
+    if (!_sameTrunk) return 0;
     var c = 0;
     while (c < from.length && c < to.length && from[c] == to[c]) {
       c++;
@@ -76,7 +76,7 @@ final class Navigation {
   }();
 
   NavDirection get direction {
-    if (!_sameRoot) return NavDirection.jump;
+    if (!_sameTrunk) return NavDirection.jump;
     final popped = _common < from.length;
     final pushed = _common < to.length;
     return popped
@@ -86,15 +86,15 @@ final class Navigation {
 
   /// The deepest screen both stacks share, above which they diverged; null on a
   /// scope [jump] (no common stack).
-  Enum? get pivot => _sameRoot && _common > 0 ? from[_common - 1].$1 : null;
+  Enum? get pivot => _sameTrunk && _common > 0 ? from[_common - 1].$1 : null;
 
   /// Screens left behind (popped above the pivot), bottom-to-top.
   List<Enum> get popped =>
-      _sameRoot ? [for (var i = _common; i < from.length; i++) from[i].$1] : const [];
+      _sameTrunk ? [for (var i = _common; i < from.length; i++) from[i].$1] : const [];
 
   /// Screens entered (pushed above the pivot), bottom-to-top.
   List<Enum> get pushed =>
-      _sameRoot ? [for (var i = _common; i < to.length; i++) to[i].$1] : const [];
+      _sameTrunk ? [for (var i = _common; i < to.length; i++) to[i].$1] : const [];
 
   bool get isForward => direction == NavDirection.forward;
   bool get isBackward => direction == NavDirection.backward;
@@ -117,8 +117,8 @@ typedef ScreenNode<S extends ScreenNodeBase<S, Widget>> = ScreenNodeBase<S, Widg
 
 /// A sub-enum's contract: like [ScreenNode] but the widget is OPTIONAL, so a row
 /// can be a bare ref to an owner screen of the same name (the owner carries the
-/// widget). Sub-enums mix this in; the root keeps [ScreenNode] (widget required),
-/// so the root can never be a ref.
+/// widget). Sub-enums mix this in; the trunk keeps [ScreenNode] (widget required),
+/// so the trunk can never be a ref.
 typedef SubScreenNode<S extends ScreenNodeBase<S, Widget?>>
     = ScreenNodeBase<S, Widget?>;
 
@@ -360,7 +360,7 @@ class _Slot {
   final Page<void> page;
 }
 
-/// One live stack: a root screen's pages plus its Navigator identity.
+/// One live stack: a trunk screen's pages plus its Navigator identity.
 class _Scope {
   final List<_Slot> slots = [];
   final GlobalKey<NavigatorState> navKey = GlobalKey<NavigatorState>();
@@ -380,20 +380,20 @@ class _Sim {
   List<StackEntry> get stack => stacks[active]!;
 }
 
-/// A direct stack seed (root..target chain of (screen, id)) for the `seedChain:`
+/// A direct stack seed (trunk..target chain of (screen, id)) for the `seedChain:`
 /// constructor arg — used by engine/restore code and tests to start at a specific
-/// stack. Consumers instead pass `initial:` (the boot widget) and let the resolver
+/// stack. Consumers instead pass `root:` (the boot widget) and let the resolver
 /// drive the first navigation; see [BootScreen].
-abstract interface class InitialScreenBase {
+abstract interface class RootScreenBase {
   List<(Enum, Object?)> get chain;
 }
 
 /// The synthetic boot placement. When a graph is built with a [bootWidget], the
-/// stack is seeded as `[(BootScreen.initial, null)]` — so the always-non-empty
+/// stack is seeded as `[(BootScreen.root, null)]` — so the always-non-empty
 /// invariant holds — and `current`/`Screen.at` report it until the first commit,
 /// which the engine auto-replaces (the boot entry leaves no history). Never part
 /// of a consumer tree; the generated `Screen.at` maps it to `Initial`.
-enum BootScreen { initial }
+enum BootScreen { root }
 
 // camelCase screen name ⇄ kebab URL segment (`editAccount` ⇄ `edit-account`).
 String _urlKebab(String s) =>
@@ -409,37 +409,37 @@ String _urlUnkebab(String s) {
 
 final class NavGraph {
   NavGraph(
-    Set<TreeNode> rootScreens, {
+    Set<TreeNode> trunkScreens, {
     this.pageOf = _defaultPageOf,
-    Object? initial,
-    InitialScreenBase? seedChain,
+    Object? root,
+    RootScreenBase? seedChain,
     this._observers = _noObservers,
-  })  : assert((initial == null) != (seedChain == null),
-            'pass exactly one of `initial:` (the boot widget) or `seedChain:`'),
-        spec = NavSpec(rootScreens) {
-    _linkRoot = _linkRootOf(rootScreens, spec);
+  })  : assert((root == null) != (seedChain == null),
+            'pass exactly one of `root:` (the boot widget) or `seedChain:`'),
+        spec = NavSpec(trunkScreens) {
+    _linkRoot = _linkRootOf(trunkScreens, spec);
     _collectViewSchema();
     delegate = NavDelegate._(this);
-    _bootWidget = initial;
-    final chain = initial != null
-        ? const <(Enum, Object?)>[(BootScreen.initial, null)]
+    _bootWidget = root;
+    final chain = root != null
+        ? const <(Enum, Object?)>[(BootScreen.root, null)]
         : seedChain!.chain;
-    _activeRoot = chain.first.$1;
+    _activeTrunk = chain.first.$1;
     final scope = _Scope();
-    var node = initial != null ? _bootNode : spec.canonical[_activeRoot]!;
+    var node = root != null ? _bootNode : spec.canonical[_activeTrunk]!;
     Enum? from;
     for (var i = 0; i < chain.length; i++) {
       final (screen, id) = chain[i];
       if (i > 0) {
         node = spec.edge(node, screen) ??
-            (throw StateError('invalid initial chain at "${screen.name}"'));
+            (throw StateError('invalid root chain at "${screen.name}"'));
       }
       final entry = StackEntry(node, id);
       scope.slots.add(_Slot(entry, _buildPage(entry, animate: false, from: from)));
       from = screen;
     }
-    _scopes[_activeRoot] = scope;
-    _visited.add(_activeRoot);
+    _scopes[_activeTrunk] = scope;
+    _visited.add(_activeTrunk);
     _visited.sort((a, b) => a.index.compareTo(b.index));
     _initWebHistory();
   }
@@ -463,8 +463,8 @@ final class NavGraph {
     bootUrl = currentPath();
     // Default the cold base by the launch URL: a bare `/` is a plain app-open
     // (throwaway, back exits); a specific path (a pasted/clicked deep link) is a
-    // returnable position. Consumer overrides via Screen.base.anchor()/passthrough().
-    _baseKept = bootUrl != null && bootUrl != '/' && bootUrl!.isNotEmpty;
+    // returnable position. Consumer overrides via Screen.root.anchor()/passthrough().
+    _rootKept = bootUrl != null && bootUrl != '/' && bootUrl!.isNotEmpty;
     // Refresh PRESERVES history.state. Blob present → refresh-induced cold-start:
     // restore directly, no resolver. Blob absent → genuine external cold-start
     // (pasted/typed URL, new tab, link): let the resolver build from the URL.
@@ -528,7 +528,7 @@ final class NavGraph {
         _suppressReport = false;
         return;
       }
-      // A bare floor: render the consumer's base widget (not the stale stack).
+      // A bare floor: render the consumer's root widget (not the stale stack).
       _floorFace = kind;
       if (kind == FloorKind.fallthrough) {
         _suppressReport = true;
@@ -564,7 +564,7 @@ final class NavGraph {
   List<String> _browserUrls = const [];
 
   /// The kind of floor at index 0 of [_browserUrls], or null when there is none
-  /// (the path is bare roots-down, e.g. `[e, f, g]`). Set when a root-switch
+  /// (the path is bare trunks-down, e.g. `[e, f, g]`). Set when a trunk-switch
   /// introduces a floor; cleared when a deepening navigation kills it.
   FloorKind? _floor;
 
@@ -576,53 +576,53 @@ final class NavGraph {
 
   /// Non-null while sitting on a BARE floor (a `sentinel`/`fallthrough` whose exit
   /// bounce was a no-op — nothing behind to leave to). The delegate then renders
-  /// the consumer's base widget instead of the (stale) stack; the base widget reads
-  /// it via `Screen.base.kind` to decide what to show. Null during boot-loading too,
+  /// the consumer's root widget instead of the (stale) stack; the base widget reads
+  /// it via `Screen.root.kind` to decide what to show. Null during boot-loading too,
   /// so null = "loading", set = "bare floor". Cleared on any real commit or land.
   FloorKind? _floorFace;
 
-  /// The base/floor kind to surface to the consumer's base widget: the bare-floor
-  /// face if we're on one, else none. Backs `Screen.base.kind`.
-  FloorKind? get baseKind => _floorFace;
+  /// The base/floor kind to surface to the consumer's root widget: the bare-floor
+  /// face if we're on one, else none. Backs `Screen.root.kind`.
+  FloorKind? get rootKind => _floorFace;
 
   /// The current front screen's widget (the top of the live stack), or null while
-  /// booting. A base widget can `return Screen.base.front` to keep showing it.
+  /// booting. A base widget can `return Screen.root.front` to keep showing it.
   Widget? get frontWidget {
     final top = _activeScope.slots.lastOrNull?.entry.screen;
-    return top == null || top == BootScreen.initial
+    return top == null || top == BootScreen.root
         ? null
         : (top as WidgetScreen).widget as Widget;
   }
 
-  /// Whether a synthetic floor (made on a root-switch) bounces out of the app
-  /// via `go(-1)` when it comes to the front. Defaults to true (back from a root
-  /// exits). Consumer-settable via [baseFallthrough]; canon clears the live
+  /// Whether a synthetic floor (made on a trunk-switch) bounces out of the app
+  /// via `go(-1)` when it comes to the front. Defaults to true (back from a trunk
+  /// exits). Consumer-settable via [rootFallthrough]; canon clears the live
   /// entry's flag to false right before bouncing (one-shot).
-  bool _baseFallthrough = true;
-  set baseFallthrough(bool v) => _baseFallthrough = v;
+  bool _rootFallthrough = true;
+  set rootFallthrough(bool v) => _rootFallthrough = v;
 
   /// The kind a freshly-introduced synthetic floor takes: armed to bounce out by
   /// default, or a quiet sentinel when the consumer has disarmed it.
   FloorKind get _armedKind =>
-      _baseFallthrough ? FloorKind.fallthrough : FloorKind.sentinel;
+      _rootFallthrough ? FloorKind.fallthrough : FloorKind.sentinel;
 
   /// Whether the launch position should be a KEPT floor — a returnable base that
-  /// back returns to (then exits) and that root-switches stack above instead of
+  /// back returns to (then exits) and that trunk-switches stack above instead of
   /// replacing. Declared by [anchor]/[passthrough]; applied at the cold-start
-  /// commit. Default false (a launch is a plain base, replaced on a root-switch).
-  bool _baseKept = false;
+  /// commit. Default false (a launch is a plain base, replaced on a trunk-switch).
+  bool _rootKept = false;
 
   /// Persist the current launch/base position as a returnable floor — back returns
-  /// to it then exits, and root-switches stack above it. Call from the `base:`
-  /// widget for a shareable cold-start destination. Backs `Screen.base.anchor()`.
-  void anchor() => _baseKept = true;
+  /// to it then exits, and trunk-switches stack above it. Call from the `base:`
+  /// widget for a shareable cold-start destination. Backs `Screen.root.anchor()`.
+  void anchor() => _rootKept = true;
 
   /// Make the launch/base a throwaway that passes through (exits) on back — the
   /// default. Call for a transient cold-start (edit/auth/one-shot) you don't want
-  /// to return into. Backs `Screen.base.passthrough()`.
-  void passthrough() => _baseKept = false;
+  /// to return into. Backs `Screen.root.passthrough()`.
+  void passthrough() => _rootKept = false;
 
-  /// A divergent switch (e.g. root→root) can't write the new path until the
+  /// A divergent switch (e.g. trunk→trunk) can't write the new path until the
   /// browser has walked back to the shared floor (`go` is async). This holds the
   /// target to rebuild once the landing popstate arrives. Null when idle.
   ({List<String> path, int from, FloorKind? floorKind})? _rebuild;
@@ -677,7 +677,7 @@ final class NavGraph {
   final NavSpec spec;
 
   /// The runtime link tree assembled from every `.link`/widget-form branch in the
-  /// tree (root-level and nested, path-prefixed by their nav ancestors), or null
+  /// tree (trunk-level and nested, path-prefixed by their nav ancestors), or null
   /// if the tree declares no links. The matcher walks it; host-agnostic (origin
   /// is supplied per parse).
   late final LinkNode? _linkRoot;
@@ -692,10 +692,10 @@ final class NavGraph {
     return node;
   }
 
-  static LinkNode? _linkRootOf(Set<TreeNode> rootScreens, NavSpec spec) {
+  static LinkNode? _linkRootOf(Set<TreeNode> trunkScreens, NavSpec spec) {
     final branches = <LinkTreeNode>{};
     // Root-level links sit directly in the tree set (no enclosing placement).
-    for (final r in rootScreens) {
+    for (final r in trunkScreens) {
       if (r is LinkBranch) branches.add(r.node);
     }
     // Nested links ride a placement; walk the canonical tree for their ancestors.
@@ -724,8 +724,8 @@ final class NavGraph {
       }
     }
 
-    for (final root in spec.roots) {
-      visit(root, const []);
+    for (final trunk in spec.trunks) {
+      visit(trunk, const []);
     }
     return branches.isEmpty ? null : linkRoot(branches);
   }
@@ -735,8 +735,8 @@ final class NavGraph {
   /// link verification already proved it's ours). Returns the runtime match, or
   /// null when the URL isn't a representable link. `Screen.parseLink` retypes it.
   LinkMatch? parseLink(String url) {
-    final root = _linkRoot;
-    if (root == null) return null;
+    final trunk = _linkRoot;
+    if (trunk == null) return null;
     final uri = Uri.tryParse(url);
     if (uri == null) return null;
     // The domain is derived from the url itself (host is captured, not matched),
@@ -744,7 +744,7 @@ final class NavGraph {
     // scheme/host — an empty prefix yields an empty-scheme/host domain that the
     // matcher compares structurally, instead of `Uri.parse('://')` throwing.
     final prefix = uri.hasScheme ? '${uri.scheme}://${uri.host}' : '';
-    return LinkMatcher(LinkSpec([DomainNode(prefix, root)])).parse(url);
+    return LinkMatcher(LinkSpec([DomainNode(prefix, trunk)])).parse(url);
   }
 
   /// Encodes a link's [template] (e.g. `user/*`) + ordered slot [values] (and,
@@ -763,7 +763,7 @@ final class NavGraph {
         fragment: fragment);
   }
 
-  /// Encodes a nav path — the ordered [screens] from root to target, each with
+  /// Encodes a nav path — the ordered [screens] from trunk to target, each with
   /// its [ids] entry (null for an id-free or inherited-bare segment) — into the
   /// nav-mirror URL under [domain]. The static counterpart of [currentUrl]: it
   /// builds the SAME `/a/b/<id>` shape from an explicit chain, not the live
@@ -816,18 +816,18 @@ final class NavGraph {
 
   final Map<Enum, _Scope> _scopes = {};
 
-  /// Visited roots in spec order — IndexedStack children stay stable.
+  /// Visited trunks in spec order — IndexedStack children stay stable.
   final List<Enum> _visited = [];
-  late Enum _activeRoot;
+  late Enum _activeTrunk;
   _Sim? _sim;
 
-  /// The consumer's boot loading UI (a `W`), shown for the [BootScreen.initial]
+  /// The consumer's boot loading UI (a `W`), shown for the [BootScreen.root]
   /// entry; null when the graph was seeded from a chain instead.
   Object? _bootWidget;
-  final GrammarNode _bootNode = GrammarNode(BootScreen.initial);
+  final GrammarNode _bootNode = GrammarNode(BootScreen.root);
 
   /// True while the active top is the synthetic boot placement (pre-first-commit).
-  bool get _booting => _activeRoot == BootScreen.initial;
+  bool get _booting => _activeTrunk == BootScreen.root;
 
   /// The cold-start URL, set by the web Router before first frame; the generated
   /// `Screen.initialUrl` parses it to a typed `Link?`. Null off the web / warm.
@@ -890,7 +890,7 @@ final class NavGraph {
       n.children.forEach(visit);
     }
 
-    spec.roots.forEach(visit);
+    spec.trunks.forEach(visit);
   }
 
   /// The current value of view-state [key] on [screen] (null = unset/default).
@@ -1059,7 +1059,7 @@ final class NavGraph {
   // refresh. Only meaningful on web — verify with a live back/forward + bfcache run.
   Map<String, Object?> toState({int? activeDepth}) => {
         'v': structureSignature, // stale-graph guard: reject restore on mismatch
-        'active': _activeRoot.name,
+        'active': _activeTrunk.name,
         if (_viewValues.values.any((m) => m.isNotEmpty))
           'views': {
             for (final e in _viewValues.entries)
@@ -1072,9 +1072,9 @@ final class NavGraph {
         'scopes': {
           // The synthetic boot scope has no persistable state and no real screen.
           for (final e in _scopes.entries)
-            if (e.key != BootScreen.initial)
+            if (e.key != BootScreen.root)
               e.key.name: [
-                for (final s in (activeDepth != null && e.key == _activeRoot
+                for (final s in (activeDepth != null && e.key == _activeTrunk
                     ? e.value.slots.take(activeDepth)
                     : e.value.slots))
                   [
@@ -1097,13 +1097,13 @@ final class NavGraph {
     if (scopes is! Map) return false;
     final built = <Enum, _Scope>{};
     for (final entry in scopes.entries) {
-      final root = _byName[entry.key];
+      final trunk = _byName[entry.key];
       final rows = entry.value;
-      if (root == null || !spec.canonical.containsKey(root) || rows is! List) {
+      if (trunk == null || !spec.canonical.containsKey(trunk) || rows is! List) {
         continue;
       }
       final scope = _Scope();
-      var node = spec.canonical[root]!;
+      var node = spec.canonical[trunk]!;
       Enum? from;
       for (var i = 0; i < rows.length; i++) {
         final row = rows[i];
@@ -1129,7 +1129,7 @@ final class NavGraph {
         scope.slots.add(_Slot(se, _buildPage(se, animate: false, from: from)));
         from = screen;
       }
-      if (scope.slots.isNotEmpty) built[root] = scope;
+      if (scope.slots.isNotEmpty) built[trunk] = scope;
     }
     if (built.isEmpty) return false; // nothing restorable → keep current state
     _scopes
@@ -1140,7 +1140,7 @@ final class NavGraph {
       ..addAll(built.keys)
       ..sort((a, b) => a.index.compareTo(b.index));
     final active = _byName[state['active']];
-    _activeRoot =
+    _activeTrunk =
         (active != null && built.containsKey(active)) ? active : built.keys.first;
     // Rebuild view-state (decode each token via its codec; flags are raw bools).
     _viewValues.clear();
@@ -1177,10 +1177,10 @@ final class NavGraph {
     // While booting (Initial), the URL is the pending launch URL the user
     // arrived on — not '/'. The resolver hasn't committed yet; keep what the
     // browser shows so the loading screen reflects where you're headed.
-    if (top.screen == BootScreen.initial) return bootUrl ?? '/';
+    if (top.screen == BootScreen.root) return bootUrl ?? '/';
     // The URL mirrors the TOP screen's forward grammar path (+ ids), NOT the raw
     // stack: back-edges (.stacked/.cycled) add stack DEPTH, never URL segments.
-    // Walk the top's resolved parent chain (root→top); each id comes from the
+    // Walk the top's resolved parent chain (trunk→top); each id comes from the
     // deepest stack entry instantiating that spine node (so back-edge depth and
     // sibling-stacked instances below the spine drop out — `[a,b,a]` → `/a`).
     final spine = <GrammarNode>[];
@@ -1213,17 +1213,17 @@ final class NavGraph {
   /// [restore]: replays legal edges and decodes ids, TRUNCATING at the first
   /// illegal edge / unknown screen / codec-rejected token (keeping the valid
   /// prefix). Returns false (no mutation) when nothing is representable.
-  /// Parse a nav-mirror URL into its root-down `(screen, id)` chain, or null if
+  /// Parse a nav-mirror URL into its trunk-down `(screen, id)` chain, or null if
   /// it doesn't resolve to a legal stack path. Pure (no commit) — the generated
   /// `parseUrl` wraps the result as a go-able `Place`. Truncation rules match
   /// [applyUrl]: unknown screen / illegal edge / rejected-or-missing id ends it.
   List<(Enum, Object?)>? parsePath(String url) {
     final segs = Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
     if (segs.isEmpty) return null;
-    final root = _byName[_urlUnkebab(segs.first)];
-    if (root == null || !spec.canonical.containsKey(root)) return null;
+    final trunk = _byName[_urlUnkebab(segs.first)];
+    if (trunk == null || !spec.canonical.containsKey(trunk)) return null;
     final chain = <(Enum, Object?)>[];
-    var node = spec.canonical[root]!;
+    var node = spec.canonical[trunk]!;
     var i = 0;
     while (i < segs.length) {
       final screen = _byName[_urlUnkebab(segs[i])];
@@ -1257,10 +1257,10 @@ final class NavGraph {
     final segs =
         Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
     if (segs.isEmpty) return false;
-    final root = _byName[_urlUnkebab(segs.first)];
-    if (root == null || !spec.canonical.containsKey(root)) return false;
+    final trunk = _byName[_urlUnkebab(segs.first)];
+    if (trunk == null || !spec.canonical.containsKey(trunk)) return false;
     final scope = _Scope();
-    var node = spec.canonical[root]!;
+    var node = spec.canonical[trunk]!;
     Enum? from;
     var i = 0;
     while (i < segs.length) {
@@ -1294,15 +1294,15 @@ final class NavGraph {
       from = screen;
     }
     if (scope.slots.isEmpty) return false;
-    _scopes[root] = scope;
-    if (!_visited.contains(root)) {
+    _scopes[trunk] = scope;
+    if (!_visited.contains(trunk)) {
       _visited
-        ..add(root)
+        ..add(trunk)
         ..sort((a, b) => a.index.compareTo(b.index));
     }
-    _activeRoot = root;
-    _scopes.remove(BootScreen.initial);
-    _visited.remove(BootScreen.initial);
+    _activeTrunk = trunk;
+    _scopes.remove(BootScreen.root);
+    _visited.remove(BootScreen.root);
     // Decode the top screen's view-state from ?query / #fragment.
     final top = scope.slots.last.entry.screen;
     final schema = _viewSchema[top];
@@ -1329,7 +1329,7 @@ final class NavGraph {
     return n;
   }
 
-  /// The live placement path of the active top, root-first.
+  /// The live placement path of the active top, trunk-first.
   List<Enum> get currentChain {
     final node =
         (_sim?.stack.last ?? _activeScope.slots.last.entry).node.resolved;
@@ -1340,17 +1340,17 @@ final class NavGraph {
     return chain;
   }
 
-  _Scope get _activeScope => _scopes[_activeRoot]!;
+  _Scope get _activeScope => _scopes[_activeTrunk]!;
 
-  StackEntry _seed(Enum root, [Object? id]) =>
-      StackEntry(spec.canonical[root]!, id);
+  StackEntry _seed(Enum trunk, [Object? id]) =>
+      StackEntry(spec.canonical[trunk]!, id);
 
-  _Scope _scopeOf(Enum root, [Object? id]) => _scopes.putIfAbsent(root, () {
-        _visited.add(root);
+  _Scope _scopeOf(Enum trunk, [Object? id]) => _scopes.putIfAbsent(trunk, () {
+        _visited.add(trunk);
         _visited.sort((a, b) => a.index.compareTo(b.index));
         return _Scope()
-          ..slots.add(_Slot(_seed(root, id),
-              _buildPage(_seed(root, id), animate: false, from: null)));
+          ..slots.add(_Slot(_seed(trunk, id),
+              _buildPage(_seed(trunk, id), animate: false, from: null)));
       });
 
   _Sim _ensureSim() => _sim ??= _Sim(
@@ -1358,7 +1358,7 @@ final class NavGraph {
           for (final e in _scopes.entries)
             e.key: [for (final s in e.value.slots) s.entry]
         },
-        _activeRoot,
+        _activeTrunk,
       );
 
   @internal
@@ -1370,7 +1370,7 @@ final class NavGraph {
     // commit, no history entry, no rebuild (so re-tapping the active tab does
     // nothing). Checked before consuming any replace flag so a chain's later
     // segment still sees it. Boot is excluded — the first commit must run.
-    if (sim.active != BootScreen.initial &&
+    if (sim.active != BootScreen.root &&
         sim.stack.isNotEmpty &&
         sim.stack.last.screen == screen &&
         sim.stack.last.id == id) {
@@ -1378,16 +1378,16 @@ final class NavGraph {
     }
     _consumeReplace(sim);
     final target = screen;
-    if (sim.active == BootScreen.initial) {
-      // First commit out of boot: drop the boot entry, seed the target's root
+    if (sim.active == BootScreen.root) {
+      // First commit out of boot: drop the boot entry, seed the target's trunk
       // fresh, and force replace — the loading screen leaves no history. The
       // resolver stays cold/warm-unaware (it just writes `Screen.goX()`).
-      final root = spec.rootOf(target);
-      sim.stacks.remove(BootScreen.initial);
-      sim.active = root;
-      sim.stacks[root] = [_seed(root, id)];
+      final trunk = spec.trunkOf(target);
+      sim.stacks.remove(BootScreen.root);
+      sim.active = trunk;
+      sim.stacks[trunk] = [_seed(trunk, id)];
       sim.mode = .replace;
-      if (target != root) {
+      if (target != trunk) {
         _apply(sim,
             resolveGo(spec, sim.stack, target, id, onCanonicalFallback: _warnCanonical));
       } else {
@@ -1406,18 +1406,18 @@ final class NavGraph {
       _apply(sim, resolveGo(spec, sim.stack, target, id));
       return _nav;
     }
-    final root = spec.rootOf(target);
-    if (root != sim.active) {
+    final trunk = spec.trunkOf(target);
+    if (trunk != sim.active) {
       // Leaving a tab with no keep resets it; a tab with any keep parks.
       if (!spec.retains(sim.active)) {
         sim.stacks[sim.active] = [_seed(sim.active)];
       }
-      sim.active = root;
-      final seeded = sim.stacks.putIfAbsent(root, () => [_seed(root, id)]);
+      sim.active = trunk;
+      final seeded = sim.stacks.putIfAbsent(trunk, () => [_seed(trunk, id)]);
       if (id != null && seeded.first.id != id) {
-        sim.stacks[root] = [_seed(root, id)];
+        sim.stacks[trunk] = [_seed(trunk, id)];
       }
-      if (target == root) {
+      if (target == trunk) {
         _schedule();
         return _nav;
       }
@@ -1468,27 +1468,27 @@ final class NavGraph {
   }
 
   /// Frees a parked [keep]: cuts the keep and everything above it from its tab's
-  /// stack, leaving the legal prefix below (or the bare root). Throws if the keep
+  /// stack, leaving the legal prefix below (or the bare trunk). Throws if the keep
   /// isn't mounted, or if it's in the currently active stack — forget is
   /// parked-only scope maintenance, not a pop. Not chainable.
   @internal
   void forget(Enum keep) {
     assert(spec.keeps.contains(keep), '"${keep.name}" is not a keep');
     final sim = _ensureSim();
-    final root = spec.rootOf(keep);
-    if (root == sim.active) {
+    final trunk = spec.trunkOf(keep);
+    if (trunk == sim.active) {
       _sim = null;
       throw StateError(
           'cannot forget "${keep.name}" — it is in the currently active stack');
     }
-    final stack = sim.stacks[root];
+    final stack = sim.stacks[trunk];
     final idx = stack == null ? -1 : stack.indexWhere((e) => e.screen == keep);
     if (idx < 0) {
       _sim = null;
       throw StateError('cannot forget "${keep.name}" — it is not mounted');
     }
     final cut = stack!.sublist(0, idx);
-    sim.stacks[root] = cut.isEmpty ? [_seed(root)] : cut;
+    sim.stacks[trunk] = cut.isEmpty ? [_seed(trunk)] : cut;
     _schedule();
   }
 
@@ -1536,8 +1536,8 @@ final class NavGraph {
         ));
       }
     }
-    _activeRoot = sim.active;
-    _scopeOf(_activeRoot);
+    _activeTrunk = sim.active;
+    _scopeOf(_activeTrunk);
     final toEntry = _activeScope.slots.last.entry;
     if (!identical(fromEntry, toEntry)) {
       _lastCommitMode = sim.mode;
@@ -1550,9 +1550,9 @@ final class NavGraph {
     }
     // First commit out of boot: drop the now-parked boot scope so its loading
     // widget unmounts and never re-renders.
-    if (_activeRoot != BootScreen.initial && _scopes.containsKey(BootScreen.initial)) {
-      _scopes.remove(BootScreen.initial);
-      _visited.remove(BootScreen.initial);
+    if (_activeTrunk != BootScreen.root && _scopes.containsKey(BootScreen.root)) {
+      _scopes.remove(BootScreen.root);
+      _visited.remove(BootScreen.root);
     }
     delegate._refresh();
   }
@@ -1561,14 +1561,14 @@ final class NavGraph {
       {required bool animate, required Enum? from}) {
     final screen = entry.screen;
     // canon owns the ScreenScope wrap, so the raw entry/id never reaches pageOf.
-    final widget = screen == BootScreen.initial
+    final widget = screen == BootScreen.root
         ? _bootWidget as Widget
         : (screen as WidgetScreen).widget as Widget;
     final content = ScreenScope(entry: entry, child: widget);
     return pageOf(
       content,
       PageCtx(screen, animate: animate, from: from),
-      screen == BootScreen.initial
+      screen == BootScreen.root
           ? const ValueKey('__boot__')
           : spec.isMulti(screen)
               ? UniqueKey()
@@ -1605,7 +1605,7 @@ final class NavDelegate extends RouterDelegate<Object>
   @override
   Widget build(BuildContext context) {
     // On a bare floor (a bounce that found nothing behind), the live stack is
-    // stale — show the consumer's base widget, which reads `Screen.base.kind`.
+    // stale — show the consumer's root widget, which reads `Screen.root.kind`.
     if (_graph._floorFace != null) return _graph._bootWidget as Widget;
     final visited = _graph._visited;
     return _ViewModel(
@@ -1620,20 +1620,20 @@ final class NavDelegate extends RouterDelegate<Object>
 
   Widget _buildStack(List<Enum> visited) {
     return IndexedStack(
-      index: visited.indexOf(_graph._activeRoot),
+      index: visited.indexOf(_graph._activeTrunk),
       children: [
-        for (final root in visited)
+        for (final trunk in visited)
           _ScopeLiveness(
-            active: root == _graph._activeRoot,
+            active: trunk == _graph._activeTrunk,
             kept: _graph.spec.keptWhenParked,
             child: TickerMode(
-              enabled: root == _graph._activeRoot,
+              enabled: trunk == _graph._activeTrunk,
               child: HeroControllerScope(
-                controller: _graph._scopes[root]!.hero,
+                controller: _graph._scopes[trunk]!.hero,
                 child: Navigator(
-                  key: _graph._scopes[root]!.navKey,
+                  key: _graph._scopes[trunk]!.navKey,
                   observers: _graph._observers(),
-                  pages: [for (final s in _graph._scopes[root]!.slots) s.page],
+                  pages: [for (final s in _graph._scopes[trunk]!.slots) s.page],
                   onDidRemovePage: _graph._onPageRemoved,
                 ),
               ),
@@ -1696,10 +1696,10 @@ final class NavDelegate extends RouterDelegate<Object>
 
       if (prev.isEmpty) {
         // Cold-start. `anchor()` → a kept floor (one returnable entry at the
-        // launch URL; root-switches stack above it). Otherwise a plain base (its
+        // launch URL; trunk-switches stack above it). Otherwise a plain base (its
         // levels are entries; back past index 0 exits). Deep non-kept cold-start
         // as a multi-level path is TODO.
-        if (_graph._baseKept) {
+        if (_graph._rootKept) {
           _graph._floor = FloorKind.kept;
           _graph._floorUrl = canon.last;
           historyReplace(canon.last, _graph._keptBlob(_graph.toState()));
@@ -1758,7 +1758,7 @@ final class NavDelegate extends RouterDelegate<Object>
           from = common;
           floorKind = _graph._floor;
         } else if (common == 0) {
-          // Root-switch (no floor shared). ≥2 levels → re-base bare; a bare root →
+          // Root-switch (no floor shared). ≥2 levels → re-base bare; a bare trunk →
           // introduce a floor (can't truncate a single entry to one cleanly).
           if (canon.length >= 2) {
             path = canon;

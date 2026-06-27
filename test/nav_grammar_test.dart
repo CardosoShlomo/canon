@@ -146,7 +146,7 @@ void main() {
       // The grafted screens live under the native parent, in one unified spec.
       expect(s.canonical[Sub.shop]!.parent!.screen, S.home);
       expect(s.canonical[Sub.catalog]!.parent!.screen, Sub.shop);
-      expect(s.rootOf(Sub.catalog), S.home);
+      expect(s.trunkOf(Sub.catalog), S.home);
     });
 
     test('navigates across the graft edge', () {
