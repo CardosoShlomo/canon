@@ -1,3 +1,8 @@
+## 0.18.0
+
+- Full browser back/forward history on web: multi-entry History API, refresh-survival, and a floor model with returnable (`anchor`) vs bounce-exit (`passthrough`) roots.
+- Grammar `root` → `trunk`; the base/initial concept claims `root` (`root:` boot widget, `Screen.rootUrl`, `Screen.root` controls, `BootScreen.root`). Breaking.
+
 ## 0.17.0
 
 - Single navigation resolver: external URLs / deep-links (web address bar + mobile app-links) route through one resolver via `setNewRoutePath`, with a consume-once cold-start replay.

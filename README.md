@@ -270,32 +270,48 @@ Link.search.query({.text('shoes')}).toUri()  // /search?text=shoes — view-stat
 ## Host & lifecycle
 
 ```dart
-MaterialApp.router(routerDelegate: Screen.delegate)   // Router integration
-MaterialApp(home: Screen.manager())                   // standalone: owns system back + auto restore
+MaterialApp.router(routerDelegate: Screen.manager)    // THE host — web + mobile, one name
 
 final off = Screen.observe((from, to) { ... });       // post-commit listener, no veto
 final snap = Screen.snapshot();                        // manual snapshot
 Screen.restore(snap);                                  // best-effort; truncates at first illegal edge
 ```
 
+`Screen.manager` is the one host — a `RouterDelegate` you wire into `MaterialApp.router(routerDelegate:)`. It owns the stack and system back on mobile and the browser back/forward + URL channel on web. (The single name is deliberate: if the wiring ever changes, the name stays — always pass it where a `RouterDelegate` goes.)
+
 `NavGraph` takes a required `root:` **boot widget** (a splash, shown until the first real screen commits), optional `pageOf` (defaults to `MaterialPage`), and optional `observers`. Mount another enum's screen family with `graft(Other.tree())`.
 
-**Cold start & deep links.** `root:` is a boot widget shown until the first screen commits. Two listeners drive the rest:
+**Cold start & deep links.** `root:` is a boot widget shown until the first screen commits — the launch URL and every runtime deep link flow through the **one resolver** (see *One model* below); the first commit out of boot **auto-replaces** the splash, leaving no history. The boot widget itself reads `Screen.rootUrl` (the launch link, parsed) only to **tailor the loading UI** — e.g. a profile skeleton when the app opened on a user link — while the resolver does the navigating.
 
-- a **link resolver** turns every incoming link — the launch URL *and* runtime deep links — into navigation. The grammar's `.link` branches parse each to a typed `Link`, which you `switch` to a `goX`; the first commit out of boot **auto-replaces** the splash, leaving no history:
+The **navigations stream** (`Screen.navigations` / `Screen.observe`) fires after each commit with the **source and destination stacks** — diff them for transitions, analytics, or restoration.
 
-  ```dart
-  switch (link) {                          // resolver — handles the initial link AND later ones alike
-    case UserLink(:final username): Screen.goUser(username);
-    case null:                      Screen.goHome();       // no/unknown link → default
-  }
-  ```
+## One model, web and mobile
 
-- the **navigations stream** (`Screen.navigations` / `Screen.observe`) fires after each commit with the **source and destination stacks** — diff them for transitions, analytics, or restoration.
+The same stack drives both platforms — back means the same thing whether it's the Android button or the browser's. The `root:` widget and one resolver are the whole contract.
 
-The boot widget itself reads `Screen.rootUrl` (the launch link, parsed) only to **tailor the loading UI** — e.g. show a profile skeleton when the app opened on a user link — while the resolver does the actual navigating.
+The resolver turns any inbound `Url` into navigation, the same way for the launch URL, a mobile deep link, or the browser's back/forward buttons:
 
-**Scope:** canon owns an in-memory stack and system back — it's an app router that also mirrors the active path and view-state into the URL (`?query`/`#fragment`, historyless), builds shareable links with `.toUri()`, and parses inbound ones from the grammar's `.link` branches. Full browser back/forward history sync is in progress. `canon_link` remains the standalone, **Flutter-free** URL ↔ sealed-`Link` codec for non-Flutter consumers.
+```dart
+Screen.resolver = (Url? url) => switch (url) {
+  Place p => Screen.go(p),     // a nav-mirror path (/profile/post/p1) → go straight there
+  UserLink(:final username) => Screen.goUser(username), // a /.link leaf → resolve to a screen
+  _ => Screen.goHome(),        // bare / or unknown → default landing
+};
+```
+
+canon hands the resolver a sealed **`Url?`** — one of: a **`Place`** (a path that mirrors a nav position — go-able, it `implements Hop` so `Screen.go(place)` replays it), a **`Link`** (a resolve-only `.link` leaf carrying data, no screen yet), **`RootUrl`** (bare `/`), or `null` (unparseable). Each parsed `Url` also carries `url.domain` (the inbound `scheme://host[:port]`, e.g. `http://localhost:8787`) — read it in the resolver to branch on origin; it's `null` for a locally-built `Url`.
+
+On web, canon speaks the browser History API directly: `goX`/`push` add entries, surgical jumps `go(-N)` to drop stacks, and the back/forward buttons feed `popstate` straight back through the resolver — so physical back and `Screen.pop()` land identically. A refresh reconstructs the live stack from the stored entry; a real cold-start runs the resolver fresh.
+
+**Cold-start on web is one entry, by design.** A browser won't let a page that the user hasn't interacted with fabricate a back-chain (an anti-trapping rule) — so a deep cold-start `Screen.go(place)` lands a *single* returnable base, not a fanned-out stack. That's exactly why `root.front` exists: it renders the face of that one base entry until the user navigates and real history accrues. **On mobile this constraint doesn't exist at all** — canon owns the stack outright, so `Screen.go(place)` builds the full path immediately. The resolver code is identical on both; only the web honors the activation rule, transparently.
+
+The bottom of the history — the **root** — has three faces the consumer picks via `Screen.root`:
+
+- `Screen.root.anchor()` — a deep cold-start (someone pasted `/profile/post/p1`) keeps a returnable base showing the front screen.
+- `Screen.root.passthrough()` — a bare `/` is a spent floor: pressing back from the first real screen exits the app rather than trapping the user.
+- the `root:` widget renders `/` itself: read `Screen.root.kind` (null when a real screen is committed) and `Screen.root.front` to either show the current face or whatever home you like.
+
+**Scope:** canon owns an in-memory stack and system back, mirrors the active path and view-state into the URL (`?query`/`#fragment`, historyless), syncs full browser back/forward history on web, builds shareable links with `.toUri()`, and parses inbound ones from the grammar's `.link` branches. `canon_link` remains the standalone, **Flutter-free** URL ↔ sealed-`Link` codec for non-Flutter consumers.
 
 ## Guarantees
 
@@ -310,9 +326,9 @@ The payoff: the spec at the top of this file *is* the complete, auditable nav sp
 
 ```yaml
 dependencies:
-  canon: ^0.15.1            # runtime
+  canon: ^0.17.0            # runtime
 dev_dependencies:
-  canon_generator: ^0.19.0  # codegen — emits screen.nav.dart
+  canon_generator: ^0.23.0  # codegen — emits screen.nav.dart
   build_runner: any
 ```
 
