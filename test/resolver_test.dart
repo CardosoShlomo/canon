@@ -54,7 +54,8 @@ void main() {
     final fired = <String>[];
     graph.setResolver(fired.add);
     graph.delegate.setNewRoutePath(
-      RouteInformation(uri: Uri.parse('/feed'), state: const <String, Object?>{}),
+      RouteInformation(
+          uri: Uri.parse('/feed'), state: const <String, Object?>{'s': <String, Object?>{}}),
     );
     expect(fired, isEmpty);
   });

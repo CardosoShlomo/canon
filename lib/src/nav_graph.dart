@@ -3,11 +3,11 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show MaterialPage;
-import 'package:flutter/services.dart' show SystemNavigator;
 import 'package:flutter/widgets.dart';
-import 'package:meta/meta.dart';
 
 import 'package:canon_codec/canon_codec.dart';
+
+import 'browser_history.dart';
 
 import 'link_dsl.dart';
 import 'link_matcher.dart';
@@ -30,6 +30,15 @@ enum NavDirection { forward, backward, roundTrip, jump }
 /// delegate reads it (`pushState`/`replaceState`); the bare stack engine, which
 /// has no history, ignores it.
 enum CommitMode { push, replace }
+
+/// The kind of synthetic base entry sitting at history index 0 (null = none):
+/// - [kept]: a real position we persist (e.g. a pasted deep link) — never killed,
+///   renders its own content, back returns to it then exits.
+/// - [fallthrough]: an armed sentinel — when it comes to the front (back lands on
+///   it) it runs `go(-1)` to leave the app and flips itself to [sentinel].
+/// - [sentinel]: a spent placeholder — doesn't bounce; the next deepening
+///   navigation kills it by re-basing the stack at index 0.
+enum FloorKind { kept, fallthrough, sentinel }
 
 /// An immutable snapshot of one committed navigation, delivered to
 /// [NavGraph.navigations]. Safe to hold past the commit: it captures the
@@ -432,7 +441,238 @@ final class NavGraph {
     _scopes[_activeRoot] = scope;
     _visited.add(_activeRoot);
     _visited.sort((a, b) => a.index.compareTo(b.index));
+    _initWebHistory();
   }
+
+  /// canon owns the browser history directly on web (raw `pushState` for output,
+  /// its own `popstate` for input) — the engine's coalescing history layer is
+  /// bypassed. Reads the launch URL and registers the back/forward listener.
+  bool _ownsHistory = false;
+  void _initWebHistory() {
+    if (!kIsWeb || !isBrowser) return;
+    _ownsHistory = true;
+    // canon speaks the History API directly. Keep the engine in multi-entry so it
+    // never eats browser-back (single-entry intercepts it), then canon owns
+    // push/replace/go(-N) and reads back/forward via popstate.
+    WidgetsFlutterBinding.ensureInitialized();
+    enableMultiEntryHistory();
+    // A Navigator init during the first frame can re-assert single-entry; re-pin
+    // multi-entry after the frame so it sticks.
+    WidgetsBinding.instance.addPostFrameCallback((_) => enableMultiEntryHistory());
+    onPopState(_onPopState);
+    bootUrl = currentPath();
+    // Default the cold base by the launch URL: a bare `/` is a plain app-open
+    // (throwaway, back exits); a specific path (a pasted/clicked deep link) is a
+    // returnable position. Consumer overrides via Screen.base.anchor()/passthrough().
+    _baseKept = bootUrl != null && bootUrl != '/' && bootUrl!.isNotEmpty;
+    // Refresh PRESERVES history.state. Blob present → refresh-induced cold-start:
+    // restore directly, no resolver. Blob absent → genuine external cold-start
+    // (pasted/typed URL, new tab, link): let the resolver build from the URL.
+    final raw = currentHistoryState();
+    final ownFloor = _floorKind(raw); // this entry's OWN kind (a kept floor)
+    final blob = _canonBlob(raw);
+    if (ownFloor == FloorKind.kept && blob != null) {
+      // Refreshing AT the kept floor: one entry, restore its launch stack.
+      _serial = (blob['serialCount'] as num?)?.toInt() ?? 0;
+      _floor = FloorKind.kept;
+      _floorUrl = bootUrl;
+      _suppressReport = true;
+      restore((blob['s'] as Map).cast<String, Object?>());
+      _suppressReport = false;
+      _browserUrls = [bootUrl!];
+      _browserBack = 0;
+    } else if (blob != null) {
+      // Refreshing AT a nav entry: adopt the floor below + rebuild the back-chain
+      // from the restored stack's prefixes.
+      _serial = (blob['serialCount'] as num?)?.toInt() ?? 0;
+      _adoptFloor(blob);
+      _suppressReport = true;
+      restore((blob['s'] as Map).cast<String, Object?>());
+      _suppressReport = false;
+      _rebuildTracking();
+    } else {
+      _pendingUrl = bootUrl; // external cold-start / bare floor → resolver
+    }
+  }
+
+  /// Unwrap a history entry's stored state to canon's blob `{serialCount, bi, s}`,
+  /// or null if it isn't a canon entry. canon writes `serialCount` at top level so
+  /// the engine's multi-entry layer treats the entry as already-tagged and never
+  /// rewrites canon's data.
+  Map<String, Object?>? _canonBlob(Object? state) =>
+      state is Map && state['s'] is Map ? state.cast<String, Object?>() : null;
+
+  /// Browser back/forward landed on an entry → canon restores from its blob. This
+  /// is the sole input channel (no Router provider); programmatic go(-N) lands here
+  /// too (suppress the echo so restore doesn't re-report).
+  void _onPopState(Object? state, String url) {
+    final kind = _floorKind(state);
+    // 1. We walked back to the anchor to complete a divergent switch.
+    if (_rebuild != null) {
+      delegate._completeRebuild();
+      return;
+    }
+    // 2. A floor entry: we're now at the floor (index 0) — record that so the
+    //    next navigation diffs from here. A `fallthrough` floor bounces out
+    //    (one-shot: disarm to `sentinel` first); a `sentinel`/`kept` floor stays.
+    if (kind != null) {
+      _floor = kind;
+      _floorUrl = url;
+      _browserUrls = [url];
+      _browserBack = 0;
+      if (kind == FloorKind.kept) {
+        // Returnable base: restore its launch snapshot and keep its URL.
+        _floorFace = null;
+        _suppressReport = true;
+        restore(((state as Map)['s'] as Map).cast<String, Object?>());
+        _suppressReport = false;
+        return;
+      }
+      // A bare floor: render the consumer's base widget (not the stale stack).
+      _floorFace = kind;
+      if (kind == FloorKind.fallthrough) {
+        _suppressReport = true;
+        historyReplace(url, _floorBlob(FloorKind.sentinel)); // disarm before leaving
+        _suppressReport = false;
+        _floor = FloorKind.sentinel;
+        _floorFace = FloorKind.sentinel;
+        historyGo(-1); // leave the app; no-op on a fresh tab → the face stays
+      }
+      delegate._notify(); // show the face (no history write)
+      return;
+    }
+    // 3. A nav entry → restore canon to it; adopt its floor + rebuild the view.
+    final blob = _canonBlob(state);
+    if (blob == null) return; // foreign/cold entry — resolver owns it
+    _serial = (blob['serialCount'] as num?)?.toInt() ?? _serial;
+    _floorFace = null;
+    _adoptFloor(blob);
+    _suppressReport = true;
+    restore((blob['s'] as Map).cast<String, Object?>());
+    _suppressReport = false;
+    _rebuildTracking();
+  }
+
+  /// canon's serial counter for history entries (mirrors the engine's multi-entry
+  /// serialCount so the engine recognizes our entries and leaves them untouched).
+  int _serial = 0;
+
+  /// The URLs of the current browser path canon holds — index 0 is the synthetic
+  /// `/` floor when [_hasFloor], then one entry per active stack level. Always the
+  /// path to the CURRENT entry (forward entries, left by a back, are the browser's
+  /// to restore via popstate). The diff against the next commit drives push/go.
+  List<String> _browserUrls = const [];
+
+  /// The kind of floor at index 0 of [_browserUrls], or null when there is none
+  /// (the path is bare roots-down, e.g. `[e, f, g]`). Set when a root-switch
+  /// introduces a floor; cleared when a deepening navigation kills it.
+  FloorKind? _floor;
+
+  /// The floor entry's URL (`/` for a synthetic floor, the launch path for a
+  /// `kept` one). Null when [_floor] is null. Stamped into every nav entry's blob
+  /// (`fu`/`fk`) so a refresh/land reconstructs the floor from the entry alone —
+  /// the rest of the back-chain is just the prefixes of the restored stack.
+  String? _floorUrl;
+
+  /// Non-null while sitting on a BARE floor (a `sentinel`/`fallthrough` whose exit
+  /// bounce was a no-op — nothing behind to leave to). The delegate then renders
+  /// the consumer's base widget instead of the (stale) stack; the base widget reads
+  /// it via `Screen.base.kind` to decide what to show. Null during boot-loading too,
+  /// so null = "loading", set = "bare floor". Cleared on any real commit or land.
+  FloorKind? _floorFace;
+
+  /// The base/floor kind to surface to the consumer's base widget: the bare-floor
+  /// face if we're on one, else none. Backs `Screen.base.kind`.
+  FloorKind? get baseKind => _floorFace;
+
+  /// The current front screen's widget (the top of the live stack), or null while
+  /// booting. A base widget can `return Screen.base.front` to keep showing it.
+  Widget? get frontWidget {
+    final top = _activeScope.slots.lastOrNull?.entry.screen;
+    return top == null || top == BootScreen.initial
+        ? null
+        : (top as WidgetScreen).widget as Widget;
+  }
+
+  /// Whether a synthetic floor (made on a root-switch) bounces out of the app
+  /// via `go(-1)` when it comes to the front. Defaults to true (back from a root
+  /// exits). Consumer-settable via [baseFallthrough]; canon clears the live
+  /// entry's flag to false right before bouncing (one-shot).
+  bool _baseFallthrough = true;
+  set baseFallthrough(bool v) => _baseFallthrough = v;
+
+  /// The kind a freshly-introduced synthetic floor takes: armed to bounce out by
+  /// default, or a quiet sentinel when the consumer has disarmed it.
+  FloorKind get _armedKind =>
+      _baseFallthrough ? FloorKind.fallthrough : FloorKind.sentinel;
+
+  /// Whether the launch position should be a KEPT floor — a returnable base that
+  /// back returns to (then exits) and that root-switches stack above instead of
+  /// replacing. Declared by [anchor]/[passthrough]; applied at the cold-start
+  /// commit. Default false (a launch is a plain base, replaced on a root-switch).
+  bool _baseKept = false;
+
+  /// Persist the current launch/base position as a returnable floor — back returns
+  /// to it then exits, and root-switches stack above it. Call from the `base:`
+  /// widget for a shareable cold-start destination. Backs `Screen.base.anchor()`.
+  void anchor() => _baseKept = true;
+
+  /// Make the launch/base a throwaway that passes through (exits) on back — the
+  /// default. Call for a transient cold-start (edit/auth/one-shot) you don't want
+  /// to return into. Backs `Screen.base.passthrough()`.
+  void passthrough() => _baseKept = false;
+
+  /// A divergent switch (e.g. root→root) can't write the new path until the
+  /// browser has walked back to the shared floor (`go` is async). This holds the
+  /// target to rebuild once the landing popstate arrives. Null when idle.
+  ({List<String> path, int from, FloorKind? floorKind})? _rebuild;
+
+  /// A history entry's stored payload `{serialCount, bi, s}`. `serialCount` at the
+  /// top level makes the engine's multi-entry layer treat the entry as
+  /// already-tagged (no rewrite). `bi` = entries behind this one (back-index, for
+  /// the pop guard); `s` = canon's nav snapshot — the part canon fully owns.
+  Map<String, Object?> _stateBlob(int backIndex, Map<String, Object?> state) => {
+        'serialCount': _serial,
+        'bi': backIndex,
+        's': state,
+        if (_floor != null) ...{'fu': _floorUrl, 'fk': _floor!.name},
+      };
+
+  /// Recompute the browser-path view from the restored active stack + the floor:
+  /// `[floor?] + the URL of each stack prefix`. The whole back-chain is derivable
+  /// this way (each entry is one screen deeper than the one below), so a refresh
+  /// or a popstate land rebuilds it from the entry alone.
+  void _rebuildTracking() {
+    _browserUrls = [
+      if (_floorUrl != null) _floorUrl!,
+      for (var d = 0; d < _activeScope.slots.length; d++) currentUrl(d),
+    ];
+    _browserBack = _browserUrls.length - 1;
+  }
+
+  /// Adopt the floor (`fu`/`fk`) recorded in a landed/refreshed entry's blob.
+  void _adoptFloor(Map<String, Object?> blob) {
+    final fk = blob['fk'];
+    _floor = fk is String ? FloorKind.values.byName(fk) : null;
+    _floorUrl = _floor != null ? blob['fu'] as String? : null;
+  }
+
+  /// A synthetic floor entry's payload: `floor` = its [FloorKind] (no nav
+  /// snapshot — the consumer's `base` widget renders it).
+  Map<String, Object?> _floorBlob(FloorKind kind) =>
+      {'serialCount': _serial, 'floor': kind.name};
+
+  /// A kept floor's payload: a floor (returnable, never killed) that ALSO carries
+  /// its nav snapshot `s`, so back returns to and re-renders the launch position.
+  Map<String, Object?> _keptBlob(Map<String, Object?> state) =>
+      {'serialCount': _serial, 'floor': FloorKind.kept.name, 's': state};
+
+  /// The [FloorKind] stored in a history entry's state, or null if it isn't a
+  /// floor (a nav entry carries `s` instead).
+  static FloorKind? _floorKind(Object? state) =>
+      state is Map && state['floor'] is String
+          ? FloorKind.values.byName(state['floor'] as String)
+          : null;
 
   final NavSpec spec;
 
@@ -615,8 +855,14 @@ final class NavGraph {
   /// stack. Set around [restore] in [NavDelegate.setNewRoutePath].
   bool _suppressReport = false;
 
+  /// Count of browser history entries behind the current one that canon pushed
+  /// (so a future `pop` knows whether there's an entry to `history.go(-1)` into
+  /// vs. having to synthesize the parent). Grows on push, shrinks on back.
+  int _browserBack = 0;
+
   /// Installs the single resolver (last-wins) and replays the pending launch url
-  /// once, if one arrived first. Never disposed — lives the app lifetime.
+  /// once, if one arrived first (the host fed a cold URL before the resolver was
+  /// set). Never disposed — lives the app lifetime.
   void setResolver(void Function(String url) fn) {
     _resolver = fn;
     final pending = _pendingUrl;
@@ -811,7 +1057,7 @@ final class NavGraph {
   // the delegate diff prev-vs-incoming to classify the transition and to no-op a
   // redundant report. Bump on every commit; persist in the blob so it survives
   // refresh. Only meaningful on web — verify with a live back/forward + bfcache run.
-  Map<String, Object?> toState() => {
+  Map<String, Object?> toState({int? activeDepth}) => {
         'v': structureSignature, // stale-graph guard: reject restore on mismatch
         'active': _activeRoot.name,
         if (_viewValues.values.any((m) => m.isNotEmpty))
@@ -828,7 +1074,9 @@ final class NavGraph {
           for (final e in _scopes.entries)
             if (e.key != BootScreen.initial)
               e.key.name: [
-                for (final s in e.value.slots)
+                for (final s in (activeDepth != null && e.key == _activeRoot
+                    ? e.value.slots.take(activeDepth)
+                    : e.value.slots))
                   [
                     s.entry.screen.name,
                     (s.entry.screen as ScreenNodeBase).id?.encode(s.entry.id),
@@ -922,9 +1170,10 @@ final class NavGraph {
   /// placement a kebab segment, each id a token via the screen's own codec
   /// (`/account/42`, `/home/settings/about`). Lossy (parked tabs aren't in it) but
   /// cold-start-capable. `/` while booting. The web Router reports this to the bar.
-  String currentUrl() {
+  String currentUrl([int? topIdx]) {
     final slots = _activeScope.slots;
-    final top = slots.last.entry;
+    final ti = topIdx ?? slots.length - 1;
+    final top = slots[ti].entry;
     // While booting (Initial), the URL is the pending launch URL the user
     // arrived on — not '/'. The resolver hasn't committed yet; keep what the
     // browser shows so the loading screen reflects where you're headed.
@@ -945,8 +1194,8 @@ final class NavGraph {
       // Inherited segments are bare — their id already rode the source segment.
       if (codec != null && node.inheritsFrom == null) {
         Object? id;
-        for (final s in slots) {
-          if (s.entry.node.resolved == node) id = s.entry.id;
+        for (var k = 0; k <= ti; k++) {
+          if (slots[k].entry.node.resolved == node) id = slots[k].entry.id;
         }
         if (id != null) parts.add(codec.encode(id));
       }
@@ -964,6 +1213,46 @@ final class NavGraph {
   /// [restore]: replays legal edges and decodes ids, TRUNCATING at the first
   /// illegal edge / unknown screen / codec-rejected token (keeping the valid
   /// prefix). Returns false (no mutation) when nothing is representable.
+  /// Parse a nav-mirror URL into its root-down `(screen, id)` chain, or null if
+  /// it doesn't resolve to a legal stack path. Pure (no commit) — the generated
+  /// `parseUrl` wraps the result as a go-able `Place`. Truncation rules match
+  /// [applyUrl]: unknown screen / illegal edge / rejected-or-missing id ends it.
+  List<(Enum, Object?)>? parsePath(String url) {
+    final segs = Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
+    if (segs.isEmpty) return null;
+    final root = _byName[_urlUnkebab(segs.first)];
+    if (root == null || !spec.canonical.containsKey(root)) return null;
+    final chain = <(Enum, Object?)>[];
+    var node = spec.canonical[root]!;
+    var i = 0;
+    while (i < segs.length) {
+      final screen = _byName[_urlUnkebab(segs[i])];
+      if (screen == null) break;
+      if (chain.isNotEmpty) {
+        final next = spec.edge(node, screen);
+        if (next == null) break;
+        node = next;
+      }
+      i++;
+      final codec = (screen as ScreenNodeBase).id;
+      Object? id;
+      if (codec != null) {
+        if (node.inheritsFrom != null) {
+          final src = chain.where((e) => e.$1 == node.inheritsFrom).lastOrNull;
+          if (src == null) break;
+          id = src.$2;
+        } else {
+          if (i >= segs.length) break;
+          id = codec.decode(segs[i]);
+          if (id == null) break;
+          i++;
+        }
+      }
+      chain.add((screen, id));
+    }
+    return chain.isEmpty ? null : chain;
+  }
+
   bool applyUrl(String url) {
     final segs =
         Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
@@ -1143,6 +1432,13 @@ final class NavGraph {
   /// is a generator/programmer error, asserted in debug. Chainable.
   @internal
   Nav pop([Enum? until]) {
+    // On web, a single pop IS a browser-back: consume the history entry via
+    // `history.go(-1)` so popstate restores the parent blob — no new entry, no
+    // accumulation. Targeted pops (until != null) still fall through to a diff.
+    if (until == null && _ownsHistory && !_booting && _browserBack > 0) {
+      historyGo(-1); // popstate restores the parent blob + its back-index
+      return _nav;
+    }
     final sim = _ensureSim();
     _consumeReplace(sim);
     final res = resolvePop(sim.stack, until);
@@ -1214,6 +1510,7 @@ final class NavGraph {
     _scheduled = false;
     _sim = null;
     if (sim == null) return;
+    _floorFace = null; // a real navigation supersedes any bare-floor face
     final fromEntry = _activeScope.slots.last.entry;
     final fromStack = [for (final s in _activeScope.slots) s.entry];
     for (final entry in sim.stacks.entries) {
@@ -1303,8 +1600,13 @@ final class NavDelegate extends RouterDelegate<Object>
   @override
   GlobalKey<NavigatorState> get navigatorKey => _graph._activeScope.navKey;
 
+  void _notify() => notifyListeners();
+
   @override
   Widget build(BuildContext context) {
+    // On a bare floor (a bounce that found nothing behind), the live stack is
+    // stale — show the consumer's base widget, which reads `Screen.base.kind`.
+    if (_graph._floorFace != null) return _graph._bootWidget as Widget;
     final visited = _graph._visited;
     return _ViewModel(
       snapshot: _graph.viewSnapshot(),
@@ -1341,10 +1643,9 @@ final class NavDelegate extends RouterDelegate<Object>
     );
   }
 
-  /// Null disables the framework's auto-report (which always PUSHES). [_refresh]
-  /// drives the report directly instead, so it can honor history REPLACE mode —
-  /// the first commit out of boot and `Screen.replace.*` replace the browser
-  /// entry rather than leaking one (the loading screen / redirect history bug).
+  /// Null: canon drives the browser History API directly in [_refresh], so the
+  /// framework must not auto-report. Input arrives via canon's own popstate
+  /// listener, not the Router.
   @override
   RouteInformation? get currentConfiguration => null;
 
@@ -1356,11 +1657,13 @@ final class NavDelegate extends RouterDelegate<Object>
   Future<void> setNewRoutePath(Object configuration) {
     if (configuration is RouteInformation) {
       final state = configuration.state;
-      if (state is Map<String, Object?>) {
+      if (state is Map && state['s'] is Map) {
         // Blob present (back/forward/refresh) → restore the nav-mirror (truth).
-        // Browser-initiated: suppress the report so the forward stack survives.
+        // `{bi, s}`: adopt the back-index, restore the snapshot. Browser-initiated:
+        // suppress the report so the forward stack survives.
         _graph._suppressReport = true;
-        _graph.restore(state);
+        _graph._browserBack = (state['bi'] as num?)?.toInt() ?? _graph._browserBack;
+        _graph.restore((state['s'] as Map).cast<String, Object?>());
         _graph._suppressReport = false;
       } else {
         // Blob absent = an EXTERNAL link: a cold-start web URL or a mobile
@@ -1383,17 +1686,136 @@ final class NavDelegate extends RouterDelegate<Object>
   }
 
   void _refresh() {
-    // Drive the platform report directly so a REPLACE commit (first-out-of-boot,
-    // Screen.replace.*) replaces the browser history entry instead of pushing.
-    // No-op off the web; the `state` blob is TRUTH for back/forward/refresh.
-    if (kIsWeb && !_graph._booting && !_graph._suppressReport) {
-      SystemNavigator.routeInformationUpdated(
-        uri: Uri.parse(_graph.currentUrl()),
-        state: _graph.toState(),
-        replace: _graph._lastCommitMode == CommitMode.replace,
-      );
+    // Write the browser history directly. `_suppressReport` is set while restoring
+    // from a popstate landing, so we don't re-report what the browser just told us.
+    // Off-web / booting: nothing to write.
+    if (_graph._ownsHistory && !_graph._booting && !_graph._suppressReport) {
+      final n = _graph._activeScope.slots.length;
+      final canon = [for (var d = 0; d < n; d++) _graph.currentUrl(d)];
+      final prev = _graph._browserUrls;
+
+      if (prev.isEmpty) {
+        // Cold-start. `anchor()` → a kept floor (one returnable entry at the
+        // launch URL; root-switches stack above it). Otherwise a plain base (its
+        // levels are entries; back past index 0 exits). Deep non-kept cold-start
+        // as a multi-level path is TODO.
+        if (_graph._baseKept) {
+          _graph._floor = FloorKind.kept;
+          _graph._floorUrl = canon.last;
+          historyReplace(canon.last, _graph._keptBlob(_graph.toState()));
+          _graph._browserUrls = [canon.last];
+          _graph._browserBack = 0;
+        } else {
+          // One entry showing the front (a cold-start can't fan into back-
+          // navigable entries on web — they'd be gesture-less/skippable).
+          historyReplace(canon.last, _graph._stateBlob(0, _graph.toState()));
+          _graph._browserUrls = [canon.last];
+          _graph._browserBack = 0;
+        }
+        notifyListeners();
+        return;
+      }
+      if (_graph._lastCommitMode == CommitMode.replace) {
+        // Screen.replace.* — redirect: overwrite the current top, no new history.
+        final eff = [if (_graph._floor != null) prev[0], ...canon];
+        historyReplace(eff.last, _navBlob(eff, eff.length - 1));
+        _graph._browserUrls = eff;
+        _graph._browserBack = eff.length - 1;
+        notifyListeners();
+        return;
+      }
+
+      // Decide the target browser path + where to start writing it + whether index
+      // 0 is a floor. A killable floor (fallthrough/sentinel) is dropped the moment
+      // a navigation gives us ≥2 levels to re-base on (the push truncates forward);
+      // a kept floor and the depth-1 case keep a floor.
+      final killable = _graph._floor != null && _graph._floor != FloorKind.kept;
+      late final List<String> path;
+      late final int from;
+      late final FloorKind? floorKind;
+
+      if (killable && canon.length >= 2) {
+        path = canon; // re-base bare at index 0, floor gone
+        from = 0;
+        floorKind = null;
+      } else {
+        final eff = [if (_graph._floor != null) prev[0], ...canon];
+        var common = 0;
+        while (common < prev.length && common < eff.length && prev[common] == eff[common]) {
+          common++;
+        }
+        if (common == prev.length && common == eff.length) {
+          notifyListeners();
+          return; // identical
+        }
+        if (common == eff.length && prev.length > eff.length) {
+          historyGo(-(prev.length - eff.length)); // pure pop
+          notifyListeners();
+          return;
+        }
+        if (common == prev.length) {
+          path = eff; // extension
+          from = common;
+          floorKind = _graph._floor;
+        } else if (common == 0) {
+          // Root-switch (no floor shared). ≥2 levels → re-base bare; a bare root →
+          // introduce a floor (can't truncate a single entry to one cleanly).
+          if (canon.length >= 2) {
+            path = canon;
+            from = 0;
+            floorKind = null;
+          } else {
+            path = ['/', ...canon];
+            from = 0;
+            floorKind = _graph._armedKind;
+          }
+        } else {
+          path = eff; // partial divergence: keep shared prefix, rebuild the tail
+          from = common;
+          floorKind = _graph._floor;
+        }
+      }
+
+      _graph._rebuild = (path: path, from: from, floorKind: floorKind);
+      final toIndex = from == 0 ? 0 : from - 1;
+      final back = prev.length - 1 - toIndex;
+      if (back > 0) {
+        historyGo(-back);
+      } else {
+        _completeRebuild();
+      }
     }
     notifyListeners();
+  }
+
+  /// The nav-entry blob for browser index [i] of path [eff]: its nav depth is the
+  /// index minus the floor offset.
+  Map<String, Object?> _navBlob(List<String> eff, int i) {
+    final navLevel = i - (_graph._floor != null ? 1 : 0);
+    return _graph._stateBlob(i, _graph.toState(activeDepth: navLevel + 1));
+  }
+
+  /// Build `path[from..]` after the browser has walked back to the anchor (index
+  /// `from-1`, or index 0 when `from == 0`). The first write replaces (consumes
+  /// the bottom) only when `from == 0`; the rest push (truncating stale forward).
+  void _completeRebuild() {
+    final r = _graph._rebuild!;
+    _graph._rebuild = null;
+    _graph._floor = r.floorKind;
+    _graph._floorUrl = r.floorKind != null ? r.path.first : null;
+    for (var i = r.from; i < r.path.length; i++) {
+      final blob = i == 0 && r.floorKind != null
+          ? _graph._floorBlob(r.floorKind!)
+          : _navBlob(r.path, i);
+      if (i == r.from && r.from == 0) {
+        historyReplace(r.path[i], blob);
+      } else {
+        _graph._serial++;
+        historyPush(r.path[i], blob);
+      }
+    }
+    _graph._browserUrls = r.path;
+    _graph._browserBack = r.path.length - 1;
   }
 }
 
