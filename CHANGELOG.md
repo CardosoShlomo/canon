@@ -1,3 +1,7 @@
+## 0.19.1
+
+- README: `Screen.pop()` returns a sealed `PopDestPlacement` you switch on directly; `Screen.go(Hop)` returns the typed nav.
+
 ## 0.19.0
 
 - Add `requireAllOf`/`requireOneOf`: a link query/fragment group that REJECTS a URL missing it (e.g. an OAuth `/callback` without `code`+`state`), vs the optional `allOf`/`oneOf`. Link branches only — rejected on screen view-state.

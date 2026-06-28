@@ -87,7 +87,7 @@ Screen.goSettings();
 Screen.goThread(threadId);
 ```
 
-For a *dynamic* kick-start, `Screen.go(Hop.x)` takes a ternary and returns a `KickstartNav` — `.at` narrows it to the exact screen it landed on (exhaustive switch).
+For a *dynamic* kick-start, `Screen.go(Hop.x)` takes a ternary and returns the landed placement directly — the least-common `…Nav` (a sealed `AnyPlacement` for a cross-screen ternary), switched exhaustively.
 
 **Surgical-chain** — continue from a live position; ids already on the stack are reused. `Screen.on(.path)` returns a placement (a typed `…Nav`) or `null`, each step offers only satisfiable children, and a whole path commits as **one** transition:
 
@@ -144,11 +144,11 @@ Screen.on(.user.depth(2))?.popToUser();                 // act on a specific occ
 
 ## Back
 
-`Screen.canPop` is `null` iff you're at a trunk. `Screen.pop()` is sugar for `Screen.canPop?.pop()` — it pops if it can and returns where you landed (or `null` at a trunk), never throws. That destination is a union over every non-leaf placement (anywhere you could land), so narrow it with `.at`:
+`Screen.canPop` is `null` iff you're at a trunk. `Screen.pop()` is sugar for `Screen.canPop?.pop()` — it pops if it can and returns where you landed (or `null` at a trunk), never throws. That destination is a **sealed `PopDestPlacement`** — one case per non-leaf placement you could land on — so you `switch` on it directly:
 
 ```dart
-final landed = Screen.pop();        // null at a trunk
-switch (landed?.at) { /* one case per non-leaf placement — exhaustive */ }
+final landed = Screen.pop();        // null at a trunk; else a sealed PopDestPlacement
+switch (landed) { /* one case per non-leaf placement — exhaustive */ }
 ```
 
 `Screen.on(...)`, `Screen.current`, and every move return a **placement** — a typed `…Nav` like `ThreadNav` or `HomeUserNav`. It's a transient cursor: each move returns the **next** placement and you step from that.
