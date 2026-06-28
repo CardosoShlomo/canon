@@ -1,6 +1,9 @@
 import 'package:canon/canon.dart';
 import 'package:test/test.dart';
 
+// Query keys for the mandatory-gate tests.
+enum _Cb with QueryKeyBase { code, state }
+
 // Mirrors what NavGraph assembles at runtime from `.links` branches: each branch
 // is a screen-rooted SegBuilder; `linkRoot` stitches them into the tree the
 // matcher walks.
@@ -71,6 +74,44 @@ void main() {
         m.printRoute(template: 'user/*', path: ['ada'], branches: [2]),
         'https://allinloop.com/user/ada',
       );
+    });
+  });
+
+  // `requireAllOf`/`requireOneOf` gate whether the URL MATCHES at all — an
+  // OAuth-style /callback is meaningless without its query, so it must reject.
+  group('mandatory query gate (requireAllOf)', () {
+    final cb = SegBuilder.forScreen('callback').query({
+      requireAllOf({_Cb.code(Codec.string), _Cb.state(Codec.string)})
+    });
+    final m =
+        LinkMatcher(LinkSpec([DomainNode('https://app.com', linkRoot({cb}))]));
+
+    test('matches when all required params present', () {
+      expect(m.parse('https://app.com/callback?code=a&state=b'), isNotNull);
+    });
+
+    test('rejects when a required param is missing', () {
+      expect(m.parse('https://app.com/callback?code=a'), isNull); // no state
+      expect(m.parse('https://app.com/callback'), isNull); // none
+    });
+  });
+
+  // `requireOneOf`: exactly one member, mandatory — none rejects, both reject.
+  group('mandatory query gate (requireOneOf)', () {
+    final cb = SegBuilder.forScreen('callback').query({
+      requireOneOf({_Cb.code(Codec.string), _Cb.state(Codec.string)})
+    });
+    final m =
+        LinkMatcher(LinkSpec([DomainNode('https://app.com', linkRoot({cb}))]));
+
+    test('matches with exactly one present', () {
+      expect(m.parse('https://app.com/callback?code=a'), isNotNull);
+    });
+    test('rejects when none present', () {
+      expect(m.parse('https://app.com/callback'), isNull);
+    });
+    test('rejects when both present (mutual exclusion)', () {
+      expect(m.parse('https://app.com/callback?code=a&state=b'), isNull);
     });
   });
 }

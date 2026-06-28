@@ -12,26 +12,30 @@ sealed class Term {
 /// One key. [codec] null = a flag (presence only); [list] true = repeated key
 /// carrying an ordered `List<elem>` ([codec] is then the ELEMENT codec).
 final class KeyDef extends Term {
-  const KeyDef(this.name, {this.codec, this.list = false, this.required = true});
+  const KeyDef(this.name, {this.codec, this.list = false, this.mandatory = true});
 
   final String name;
   final Codec<Object?>? codec;
   final bool list;
-  final bool required;
+  final bool mandatory;
 }
 
 /// Co-occurrence: all members present (→ record) or all absent. A partial set
-/// is a parse failure.
+/// is a parse failure. [mandatory] true forbids the all-absent case too — the
+/// link only matches when every member is present (link branches only).
 final class AllOf extends Term {
-  const AllOf(this.members);
+  const AllOf(this.members, {this.mandatory = false});
   final List<Term> members;
+  final bool mandatory;
 }
 
 /// Mutual exclusion: exactly one member present (→ sealed union), or none. Two
-/// or more present is a parse failure.
+/// or more present is a parse failure. [mandatory] true forbids the none case —
+/// the link only matches when exactly one member is present (link branches only).
 final class OneOf extends Term {
-  const OneOf(this.members);
+  const OneOf(this.members, {this.mandatory = false});
   final List<Term> members;
+  final bool mandatory;
 }
 
 /// A query (or fragment) schema: a list of terms. Unmodeled keys are always

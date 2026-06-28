@@ -19,7 +19,7 @@ final spec = LinkSpec([
             LinkNode(
               name: 'user',
               query: ParamSchema(
-                  [KeyDef('loop', required: false)]), // codec null => flag
+                  [KeyDef('loop', mandatory: false)]), // codec null => flag
             ),
           ),
         ),
@@ -28,7 +28,7 @@ final spec = LinkSpec([
         'search',
         LinkNode(name: 'search', query: ParamSchema([
           KeyDef('q', codec: Codec.string),
-          KeyDef('sort', codec: Codec.enumValues(Sort.values), required: false),
+          KeyDef('sort', codec: Codec.enumValues(Sort.values), mandatory: false),
           KeyDef('tag', codec: Codec.string, list: true),
         ])),
       ),

@@ -189,14 +189,17 @@ final class _KeyValue implements QueryTerm {
 }
 
 final class _Combinator implements QueryTerm {
-  _Combinator(this.members, {required this.exclusive});
+  _Combinator(this.members, {required this.exclusive, this.mandatory = false});
   final Set<QueryTerm> members;
   final bool exclusive;
+  final bool mandatory;
 
   @override
   Term _buildTerm() {
     final terms = [for (final m in members) m._buildTerm()];
-    return exclusive ? OneOf(terms) : AllOf(terms);
+    return exclusive
+        ? OneOf(terms, mandatory: mandatory)
+        : AllOf(terms, mandatory: mandatory);
   }
 }
 
@@ -227,6 +230,18 @@ QueryTerm allOf(Set<QueryTerm> members) => _Combinator(members, exclusive: false
 
 /// Mutual exclusion: exactly one of [members] present (→ sealed union) or none.
 QueryTerm oneOf(Set<QueryTerm> members) => _Combinator(members, exclusive: true);
+
+/// Like [allOf] but REQUIRED: the link only matches when all members are
+/// present — a URL missing them is rejected, not resolved with a null group.
+/// Link branches (`.link`/`slots`) only; rejected on screen view-state, where a
+/// query is decoration, not part of the route's identity.
+QueryTerm requireAllOf(Set<QueryTerm> members) =>
+    _Combinator(members, exclusive: false, mandatory: true);
+
+/// Like [oneOf] but REQUIRED: the link only matches when exactly one member is
+/// present — a URL with none is rejected. Link branches only (see [requireAllOf]).
+QueryTerm requireOneOf(Set<QueryTerm> members) =>
+    _Combinator(members, exclusive: true, mandatory: true);
 
 /// A domain root — a URL prefix (scheme + optional host). The first domain in
 /// the tree is the one used for output. Inlined (not an enum): root-only by type.

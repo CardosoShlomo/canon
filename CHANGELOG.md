@@ -1,3 +1,7 @@
+## 0.19.0
+
+- Add `requireAllOf`/`requireOneOf`: a link query/fragment group that REJECTS a URL missing it (e.g. an OAuth `/callback` without `code`+`state`), vs the optional `allOf`/`oneOf`. Link branches only — rejected on screen view-state.
+
 ## 0.18.1
 
 - README: sharpen positioning and document the unified web/mobile model — `Screen.manager`, the `Url`→`Place`/`Link`/`RootUrl` resolver, and `url.domain`.

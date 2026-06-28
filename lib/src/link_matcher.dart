@@ -177,24 +177,24 @@ final class LinkMatcher {
           return true;
         }
         if (occ == null) {
-          if (term.required) return false;
+          if (term.mandatory) return false;
           return true; // optional single absent — no entry
         }
         final v = term.codec!.decode(occ.first);
         if (v == null) return false;
         values[term.name] = v;
         return true;
-      case AllOf(:final members):
+      case AllOf(:final members, :final mandatory):
         final present = members.where((t) => _present(t, raw)).toList();
-        if (present.isEmpty) return true; // group absent
+        if (present.isEmpty) return !mandatory; // absent: ok unless mandatory
         if (present.length != members.length) return false; // partial
         for (final t in members) {
           if (!_decodeTerm(t, raw, values)) return false;
         }
         return true;
-      case OneOf(:final members):
+      case OneOf(:final members, :final mandatory):
         final present = members.where((t) => _present(t, raw)).toList();
-        if (present.isEmpty) return true; // group absent
+        if (present.isEmpty) return !mandatory; // absent: ok unless mandatory
         if (present.length > 1) return false; // mutual exclusion violated
         return _decodeTerm(present.first, raw, values);
     }
