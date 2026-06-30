@@ -3,7 +3,7 @@ import 'package:test/test.dart';
 
 // A hand-written @ids enum: the id-space IS this enum. Named identities,
 // a composite, and value-codec passthroughs are all just rows. No generation.
-@ids
+@IDs()
 enum Ids with IdNode {
   user(.uuid),
   ad(.uuid),

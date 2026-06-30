@@ -8,12 +8,14 @@ import 'package:canon_codec/canon_codec.dart';
 ///
 /// The marker only LOCATES the id-space for the other generators (so a screen's
 /// `id` or a registry's key can be validated against it) — it emits no code.
-class Ids {
-  const Ids();
+///
+/// Applied as `@IDs()`. NOTE: there is deliberately no lowercase `const ids` —
+/// the natural name a user gives their id-space enum is `Ids`, and the generated
+/// nav code uses `ids` pervasively as an identifier, so a top-level `ids`/`Ids`
+/// from canon would shadow them. `IDs` (capital D) avoids both.
+class IDs {
+  const IDs();
 }
-
-/// The arg-less default.
-const ids = Ids();
 
 /// The contract an `@ids` enum wears: every row carries a [codec]. The node IS a
 /// [Codec] (it delegates to its inner one), so a screen can bind it straight into
