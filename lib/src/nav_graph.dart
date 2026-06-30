@@ -511,6 +511,7 @@ final class NavGraph {
     // never eats browser-back (single-entry intercepts it), then canon owns
     // push/replace/go(-N) and reads back/forward via popstate.
     WidgetsFlutterBinding.ensureInitialized();
+    usePathUrls(); // canon owns the URL strategy: clean paths, before the URL read
     enableMultiEntryHistory();
     // A Navigator init during the first frame can re-assert single-entry; re-pin
     // multi-entry after the frame so it sticks.

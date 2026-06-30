@@ -1,7 +1,12 @@
 import 'dart:js_interop';
 
 import 'package:flutter/services.dart' show SystemNavigator;
+import 'package:flutter_web_plugins/url_strategy.dart' show usePathUrlStrategy;
 import 'package:web/web.dart' as web;
+
+/// Switch the engine to clean PATH urls (no `#`) — canon's default. Called once
+/// before the Router reads the launch URL, so deep links round-trip as real paths.
+void usePathUrls() => usePathUrlStrategy();
 
 /// Put the Flutter engine in multi-entry history mode so browser back/forward
 /// are real history navigations (the single-entry default cancels back). The

@@ -3,6 +3,7 @@
 bool get isBrowser => false;
 
 Future<void> enableMultiEntryHistory() async {}
+void usePathUrls() {}
 
 String currentPath() => '/';
 void historyGo(int delta) {}
