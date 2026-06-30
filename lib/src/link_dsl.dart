@@ -161,12 +161,12 @@ final class SlotBuilder with _Chain {
   Edge _toEdge(List<Term> shared) => SlotEdge(codecs, _node(null, shared));
 }
 
-/// A single-codec slot: the next path segment is one value of [codec].
-SlotBuilder slot(Codec<Object?> codec) => SlotBuilder._([codec]);
-
-/// A union slot: the next segment is tried against [codecs] in set order
-/// (first match wins). Generates a sealed type at the use-site.
-SlotBuilder slots(Set<Codec<Object?>> codecs) => SlotBuilder._([...codecs]);
+/// A path slot: the next segment is one value of [codec]. A union is a single
+/// codec built with `|` — `slot(.uuid(#userId) | .username)` — whose branches are
+/// expanded here, tried in order (first match wins), generating a sealed type at
+/// the use-site.
+SlotBuilder slot(Codec<Object?> codec) => SlotBuilder._(
+    codec is UnionCodec ? [...codec.branches] : [codec]);
 
 /// Query/fragment key names — enum values mixing this in. A bare value is a
 /// flag; `Key(codec)` is a value/list.
@@ -225,20 +225,26 @@ Map<String, Codec<Object?>?> viewSchema(Set<QueryTerm> terms) {
   return out;
 }
 
-/// Co-occurrence: all of [members] present together (→ record) or none.
-QueryTerm allOf(Set<QueryTerm> members) => _Combinator(members, exclusive: false);
+/// The codec algebra over query/fragment terms: `a & b` is co-occurrence (all
+/// present together → record), `a | b` is mutual exclusion (exactly one → sealed
+/// union). Dart binds `&` tighter than `|`, so `a & b | c` reads as `(a & b) | c`
+/// — use parentheses to group the other way. An extension, so the `QueryTerm`
+/// interface (and its implementers) stay untouched.
+extension QueryTermAlgebra on QueryTerm {
+  QueryTerm operator &(QueryTerm other) =>
+      _Combinator({this, other}, exclusive: false);
+  QueryTerm operator |(QueryTerm other) =>
+      _Combinator({this, other}, exclusive: true);
+}
 
-/// Mutual exclusion: exactly one of [members] present (→ sealed union) or none.
-QueryTerm oneOf(Set<QueryTerm> members) => _Combinator(members, exclusive: true);
-
-/// Like [allOf] but REQUIRED: the link only matches when all members are
+/// REQUIRED co-occurrence: the link only matches when all members are
 /// present — a URL missing them is rejected, not resolved with a null group.
-/// Link branches (`.link`/`slots`) only; rejected on screen view-state, where a
+/// Link branches (`.link`/`slot`) only; rejected on screen view-state, where a
 /// query is decoration, not part of the route's identity.
 QueryTerm requireAllOf(Set<QueryTerm> members) =>
     _Combinator(members, exclusive: false, mandatory: true);
 
-/// Like [oneOf] but REQUIRED: the link only matches when exactly one member is
+/// REQUIRED mutual exclusion: the link only matches when exactly one member is
 /// present — a URL with none is rejected. Link branches only (see [requireAllOf]).
 QueryTerm requireOneOf(Set<QueryTerm> members) =>
     _Combinator(members, exclusive: true, mandatory: true);

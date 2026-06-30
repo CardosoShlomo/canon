@@ -66,6 +66,11 @@ final class GrammarNode {
   /// null. The nav-mirror URL puts the id on the SOURCE only — an inherited
   /// segment is bare (`/item/42/edit-item`, not `…/edit-item/42`).
   Enum? inheritsFrom;
+
+  /// Additional ancestor sources for a COMPOSITE (record) id — each contributes
+  /// one component of the id, matched to the source by entity (id type). Empty
+  /// for the single-source `inherit(a)` path, which uses [inheritsFrom] alone.
+  List<Enum> inheritsAlso = const [];
   GrammarNode? parent;
 
   /// The node whose children answer "what may follow here" — self, or the
@@ -193,24 +198,31 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   /// equals the current top).
   _BackEdge<S> get stacked => _BackEdge<S>(this, collapse: false);
 
-  /// Declares this placement's id as [ancestor]'s (structurally): the generated
+  /// Declares this placement's id as its ancestors' (structurally): the generated
   /// push verb takes no id and reads the live ancestor id instead. Read
   /// syntactically by the generator; at runtime stashes an inherit-marked node so
   /// the nav-mirror URL can omit the (duplicate) id on this segment.
-  S inherit(S ancestor) {
-    _stash.add(GrammarNode(this)..inheritsFrom = ancestor);
+  ///
+  /// With one [a] this is the single-source form (the whole id is [a]'s). With
+  /// [b]/[c] it composes a COMPOSITE (record) id: each ancestor contributes one
+  /// component, matched by entity (id type); the kick-start verb shrinks to only
+  /// the components no ancestor supplies.
+  S inherit(S a, [S? b, S? c]) {
+    _stash.add(GrammarNode(this)
+      ..inheritsFrom = a
+      ..inheritsAlso = [b, c].whereType<Enum>().toList());
     return _self;
   }
 
-  /// Opens link-world for this screen: declares URL branches (`slot`/`slots`/
-  /// nested segs) that resolve to it. Generator-read; a runtime no-op (links
+  /// Opens link-world for this screen: declares URL branches (`slot`/nested
+  /// segs) that resolve to it. Generator-read; a runtime no-op (links
   /// don't seed the nav stack). Children are link DSL nodes, so `.links` can't
   /// nest — the one-way boundary is enforced by the child type.
   LinkBranch<S> links([Set<LinkTreeNode?> children = const {}]) =>
       LinkBranch<S>(SegBuilder.forScreen(name)..children = children);
 
   /// Singular alias of [links] — reads naturally for a single union branch:
-  /// `user.link({slots({.literal('me'), .uuid(#userId), .username})})`.
+  /// `user.link({slot(.literal('me') | .uuid(#userId) | .username)})`.
   LinkBranch<S> link([Set<LinkTreeNode?> children = const {}]) => links(children);
 
   /// Declares this placement's view-state QUERY keys (`feed(...).query({category(

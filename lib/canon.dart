@@ -6,6 +6,8 @@ export 'src/nav_graph.dart' hide Nav;
 export 'src/screen_node.dart'
     hide GrammarNode, NavSpec, NavResolution, resolveGo, resolvePop;
 export 'src/screens_annotation.dart';
+export 'src/registries_annotation.dart';
+export 'src/ids_annotation.dart';
 
 // Link layer — duplicated from canon_link (intentional; canon_link may later
 // collapse into canon). The DSL (slot/slots/query/fragment/tree/Domain) is

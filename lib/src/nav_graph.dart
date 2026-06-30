@@ -407,6 +407,62 @@ String _urlUnkebab(String s) {
           .join();
 }
 
+/// Component codecs of a COMPOSITE (record) id codec, in field order, or null
+/// when [codec] is atomic. The nav-mirror URL splits a composite-inherited
+/// segment per component (each inherited one rides its ancestor's segment).
+List<Codec<Object?>>? _idComponentCodecs(Codec<Object?> codec) {
+  if (codec is Record2Codec) return [codec.a, codec.b];
+  if (codec is Record3Codec) return [codec.a, codec.b, codec.c];
+  return null;
+}
+
+/// The component separator a composite codec joins with (Record2/3's `sep`).
+String _idSep(Codec<Object?> codec) => codec is Record2Codec
+    ? codec.sep
+    : codec is Record3Codec
+        ? codec.sep
+        : '~';
+
+/// The component values of a composite id, in field order.
+List<Object?> _idComponentValues(Codec<Object?> codec, Object? id) {
+  if (codec is Record3Codec) {
+    final v = id as (Object?, Object?, Object?);
+    return [v.$1, v.$2, v.$3];
+  }
+  final v = id as (Object?, Object?);
+  return [v.$1, v.$2];
+}
+
+/// Rebuilds a composite id record from its in-order component values.
+Object? _composeId(Codec<Object?> codec, List<Object?> comps) =>
+    codec is Record3Codec
+        ? (comps[0], comps[1], comps[2])
+        : (comps[0], comps[1]);
+
+/// For a composite-inherited [node], the ancestor screen supplying each id
+/// component (null = carried on this segment's own URL slot), or null when the
+/// node is not a composite-inherited placement. Matches each inherit source to
+/// the first as-yet-unclaimed component of the same id type — the rule the
+/// generator's composite verb uses to assemble `(_idOf(a), _idOf(b))`.
+List<Enum?>? _compositeSources(GrammarNode node) {
+  if (node.inheritsFrom == null) return null;
+  final codec = (node.screen as ScreenNodeBase).id;
+  if (codec == null) return null;
+  final comps = _idComponentCodecs(codec);
+  if (comps == null) return null;
+  final out = List<Enum?>.filled(comps.length, null);
+  for (final src in [node.inheritsFrom!, ...node.inheritsAlso]) {
+    final srcCodec = (src as ScreenNodeBase).id;
+    for (var i = 0; i < comps.length; i++) {
+      if (out[i] == null && comps[i].runtimeType == srcCodec.runtimeType) {
+        out[i] = src;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 final class NavGraph {
   NavGraph(
     Set<TreeNode> trunkScreens, {
@@ -1191,12 +1247,26 @@ final class NavGraph {
     for (final node in spine) {
       parts.add(_urlKebab(node.screen.name));
       final codec = (node.screen as ScreenNodeBase).id;
-      // Inherited segments are bare — their id already rode the source segment.
-      if (codec != null && node.inheritsFrom == null) {
-        Object? id;
-        for (var k = 0; k <= ti; k++) {
-          if (slots[k].entry.node.resolved == node) id = slots[k].entry.id;
-        }
+      if (codec == null) continue;
+      Object? id;
+      for (var k = 0; k <= ti; k++) {
+        if (slots[k].entry.node.resolved == node) id = slots[k].entry.id;
+      }
+      final sources = _compositeSources(node);
+      if (sources != null) {
+        // Composite-inherited: each inherited component already rode its
+        // ancestor's segment; only the non-inherited components appear here.
+        if (id == null) continue;
+        final comps = _idComponentCodecs(codec)!;
+        final values = _idComponentValues(codec, id);
+        final own = [
+          for (var c = 0; c < sources.length; c++)
+            if (sources[c] == null) comps[c].encode(values[c])
+        ];
+        if (own.isNotEmpty) parts.add(own.join(_idSep(codec)));
+      } else if (node.inheritsFrom == null) {
+        // Atomic id segment carries its token; a single-source inherited
+        // segment is bare — its id already rode the source segment.
         if (id != null) parts.add(codec.encode(id));
       }
     }
@@ -1237,7 +1307,47 @@ final class NavGraph {
       final codec = (screen as ScreenNodeBase).id;
       Object? id;
       if (codec != null) {
-        if (node.inheritsFrom != null) {
+        final sources = _compositeSources(node);
+        if (sources != null) {
+          final comps = _idComponentCodecs(codec)!;
+          final values = List<Object?>.filled(comps.length, null);
+          var ok = true;
+          for (var c = 0; c < sources.length; c++) {
+            final s = sources[c];
+            if (s == null) continue;
+            final src = chain.where((e) => e.$1 == s).lastOrNull;
+            if (src == null) {
+              ok = false;
+              break;
+            }
+            values[c] = src.$2;
+          }
+          if (ok) {
+            final own = [
+              for (var c = 0; c < sources.length; c++)
+                if (sources[c] == null) c
+            ];
+            if (own.isNotEmpty) {
+              final tokens =
+                  i < segs.length ? segs[i].split(_idSep(codec)) : const [];
+              if (tokens.length != own.length) {
+                ok = false;
+              } else {
+                for (var k = 0; k < own.length; k++) {
+                  final dv = comps[own[k]].decode(tokens[k]);
+                  if (dv == null) {
+                    ok = false;
+                    break;
+                  }
+                  values[own[k]] = dv;
+                }
+                if (ok) i++;
+              }
+            }
+          }
+          if (!ok) break;
+          id = _composeId(codec, values);
+        } else if (node.inheritsFrom != null) {
           final src = chain.where((e) => e.$1 == node.inheritsFrom).lastOrNull;
           if (src == null) break;
           id = src.$2;
@@ -1275,7 +1385,50 @@ final class NavGraph {
       final codec = (screen as ScreenNodeBase).id;
       Object? id;
       if (codec != null) {
-        if (node.inheritsFrom != null) {
+        final sources = _compositeSources(node);
+        if (sources != null) {
+          // Composite: each inherited component reuses its source segment's id;
+          // the non-inherited components ride this segment's own token.
+          final comps = _idComponentCodecs(codec)!;
+          final values = List<Object?>.filled(comps.length, null);
+          var ok = true;
+          for (var c = 0; c < sources.length; c++) {
+            final s = sources[c];
+            if (s == null) continue;
+            final src =
+                scope.slots.where((sl) => sl.entry.screen == s).lastOrNull;
+            if (src == null) {
+              ok = false; // source not on the stack → truncate
+              break;
+            }
+            values[c] = src.entry.id;
+          }
+          if (ok) {
+            final own = [
+              for (var c = 0; c < sources.length; c++)
+                if (sources[c] == null) c
+            ];
+            if (own.isNotEmpty) {
+              final tokens =
+                  i < segs.length ? segs[i].split(_idSep(codec)) : const [];
+              if (tokens.length != own.length) {
+                ok = false;
+              } else {
+                for (var k = 0; k < own.length; k++) {
+                  final dv = comps[own[k]].decode(tokens[k]);
+                  if (dv == null) {
+                    ok = false;
+                    break;
+                  }
+                  values[own[k]] = dv;
+                }
+                if (ok) i++;
+              }
+            }
+          }
+          if (!ok) break;
+          id = _composeId(codec, values);
+        } else if (node.inheritsFrom != null) {
           // Inherited: no URL token — reuse the source segment's id from below.
           final src = scope.slots
               .where((s) => s.entry.screen == node.inheritsFrom)
