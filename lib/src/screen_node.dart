@@ -203,14 +203,19 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   /// syntactically by the generator; at runtime stashes an inherit-marked node so
   /// the nav-mirror URL can omit the (duplicate) id on this segment.
   ///
-  /// With one [a] this is the single-source form (the whole id is [a]'s). With
-  /// [b]/[c] it composes a COMPOSITE (record) id: each ancestor contributes one
-  /// component, matched by entity (id type); the kick-start verb shrinks to only
-  /// the components no ancestor supplies.
-  S inherit(S a, [S? b, S? c]) {
+  /// With one [s1] this is the single-source form (the whole id is [s1]'s — or,
+  /// when [s1]'s id is composite, the one component matching this screen's
+  /// node). With more sources it composes a COMPOSITE id: each ancestor
+  /// contributes one component, matched by node; the kick-start verb shrinks to
+  /// only the components no ancestor supplies. Arity mirrors `IdNode.compose`:
+  /// a composite id has 2–16 components, so up to 16 sources.
+  S inherit(S s1,
+      [S? s2, S? s3, S? s4, S? s5, S? s6, S? s7, S? s8, S? s9, S? s10, S? s11,
+      S? s12, S? s13, S? s14, S? s15, S? s16]) {
     _stash.add(GrammarNode(this)
-      ..inheritsFrom = a
-      ..inheritsAlso = [b, c].whereType<Enum>().toList());
+      ..inheritsFrom = s1
+      ..inheritsAlso = [?s2, ?s3, ?s4, ?s5, ?s6, ?s7, ?s8, ?s9, ?s10, ?s11,
+          ?s12, ?s13, ?s14, ?s15, ?s16]);
     return _self;
   }
 
