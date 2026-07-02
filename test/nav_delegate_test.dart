@@ -3,18 +3,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:canon/canon.dart';
 
 enum N with ScreenNode<N> {
-  home, feed, profile, chat;
+  home, feed, profile, review;
 
   @override
   Widget get widget => _Label(this);
 
-  // profile/chat carry a string id codec → their ids round-trip on restore;
+  // profile/review carry a string id codec → their ids round-trip on restore;
   // home/feed are id-free (default null codec).
   @override
   Codec<Object?>? get id =>
-      (this == profile || this == chat) ? Codec.string : null;
+      (this == profile || this == review) ? Codec.string : null;
 
-  static N _profile() => profile({profile.cycled, chat({profile.cycled})});
+  static N _profile() => profile({profile.cycled, review({profile.cycled})});
 
   static NavGraph graph() => NavGraph(
         {
@@ -244,11 +244,11 @@ void main() {
     final off = graph.observe((from, to) => seen.add('${from.name}>${to.name}'));
     graph.go(N.profile, 'a');
     await tester.pumpAndSettle();
-    graph.go(N.chat, 'c');
+    graph.go(N.review, 'c');
     await tester.pumpAndSettle();
     graph.pop();
     await tester.pumpAndSettle();
-    expect(seen, ['home>profile', 'profile>chat', 'chat>profile']);
+    expect(seen, ['home>profile', 'profile>review', 'review>profile']);
     off();
     graph.go(N.feed);
     await tester.pumpAndSettle();
@@ -257,7 +257,7 @@ void main() {
 
   testWidgets('chain commits as one diff', (tester) async {
     final graph = await pump(tester);
-    graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b');
+    graph.go(N.profile, 'a').go(N.review, 'c').go(N.profile, 'b');
     await tester.pumpAndSettle();
     expect(find.text('profile:b'), findsOneWidget);
     expect(graph.stack.length, 4);
@@ -357,23 +357,23 @@ void main() {
 
   testWidgets('NavStack views work (Screen.stack building block)', (tester) async {
     final graph = await pump(tester);
-    graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b');
+    graph.go(N.profile, 'a').go(N.review, 'c').go(N.profile, 'b');
     await tester.pumpAndSettle();
     final stack = NavStack([for (final e in graph.stack) NavEntry(e.screen, e.id)]);
-    expect(stack.screens, [N.home, N.profile, N.chat, N.profile]);
-    expect(stack.reachable, [N.profile, N.chat, N.home]); // chat survives
+    expect(stack.screens, [N.home, N.profile, N.review, N.profile]);
+    expect(stack.reachable, [N.profile, N.review, N.home]); // review survives
     expect(stack.current, N.profile);
   });
 
   testWidgets('repeat-collapse pops back through the cycle', (tester) async {
     final graph = await pump(tester);
-    graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'a');
+    graph.go(N.profile, 'a').go(N.review, 'c').go(N.profile, 'a');
     await tester.pumpAndSettle();
     expect(graph.stack.length, 4);
-    graph.go(N.chat, 'c'); // completes the period-2 block -> collapse
+    graph.go(N.review, 'c'); // completes the period-2 block -> collapse
     await tester.pumpAndSettle();
     expect(graph.stack.length, 3);
-    expect(find.text('chat:c'), findsOneWidget);
+    expect(find.text('review:c'), findsOneWidget);
   });
 
   testWidgets('edge-required go resolves a reachable target', (tester) async {
@@ -401,7 +401,7 @@ void main() {
 
   testWidgets('self-pop reaches the previous occurrence, skipping the top', (tester) async {
     final graph = await pump(tester);
-    graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b'); // [home, p:a, chat, p:b]
+    graph.go(N.profile, 'a').go(N.review, 'c').go(N.profile, 'b'); // [home, p:a, review, p:b]
     await tester.pumpAndSettle();
     graph.pop(N.profile); // self-pop: to the previous profile (a), not a no-op
     await tester.pumpAndSettle();
@@ -419,12 +419,12 @@ void main() {
 
   testWidgets('countOf counts active-stack occurrences (cycle depth)', (tester) async {
     final graph = await pump(tester);
-    graph.go(N.profile, 'a').go(N.chat, 'c').go(N.profile, 'b');
+    graph.go(N.profile, 'a').go(N.review, 'c').go(N.profile, 'b');
     await tester.pumpAndSettle();
     expect(graph.countOf(N.profile), 2); // a and b
     expect(graph.countOf(N.profile, 'a'), 1); // just a
     expect(graph.countOf(N.profile, 'z'), 0); // absent id
-    expect(graph.countOf(N.chat), 1);
+    expect(graph.countOf(N.review), 1);
     expect(graph.countOf(N.feed), 0); // parked tab, not the active stack
   });
 
@@ -492,17 +492,17 @@ void main() {
     await tester.pumpWidget(MaterialApp.router(routerDelegate: g1.delegate));
     g1.go(N.profile, 'p'); // home -> profile:p
     await tester.pumpAndSettle();
-    g1.go(N.chat, 'c'); // -> chat:c  (chat is profile's child)
+    g1.go(N.review, 'c'); // -> review:c  (review is profile's child)
     await tester.pumpAndSettle();
     final snap = g1.toState();
-    // Corrupt chat's id token: '' is rejected by Codec.string.
+    // Corrupt review's id token: '' is rejected by Codec.string.
     ((snap['scopes'] as Map)['home'] as List)[2][1] = '';
 
     final g2 = N.graph();
     await tester.pumpWidget(MaterialApp.router(routerDelegate: g2.delegate));
     expect(g2.restore(snap), isTrue);
     await tester.pumpAndSettle();
-    // chat dropped (codec rejected its token); the prefix below survives.
+    // review dropped (codec rejected its token); the prefix below survives.
     expect(g2.stack.map((e) => '${e.screen.name}:${e.id}').toList(),
         ['home:null', 'profile:p']);
   });

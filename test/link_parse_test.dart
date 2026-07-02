@@ -9,27 +9,27 @@ enum _Cb with QueryKeyBase { code, state }
 // matcher walks.
 void main() {
   group('link parse (runtime tree from .links branches)', () {
-    final user = SegBuilder.forScreen('user')..children = {slot(Codec.username)};
-    final ad = SegBuilder.forScreen('ad')..children = {slot(Codec.uuid)};
-    final root = linkRoot({user, ad});
-    final spec = LinkSpec([DomainNode('https://allinloop.com', root)]);
+    final author = SegBuilder.forScreen('author')..children = {slot(Codec.username)};
+    final product = SegBuilder.forScreen('product')..children = {slot(Codec.uuid)};
+    final root = linkRoot({author, product});
+    final spec = LinkSpec([DomainNode('https://example.com', root)]);
     final m = LinkMatcher(spec);
 
-    test('matches /user/<username> → template + path', () {
-      final r = m.parse('https://allinloop.com/user/ada')!;
-      expect(r.template, 'user/*');
+    test('matches /author/<username> → template + path', () {
+      final r = m.parse('https://example.com/author/ada')!;
+      expect(r.template, 'author/*');
       expect(r.path, ['ada']);
     });
 
-    test('matches /ad/<uuid>', () {
+    test('matches /product/<uuid>', () {
       const u = '550e8400-e29b-41d4-a716-446655440000';
-      final r = m.parse('https://allinloop.com/ad/$u')!;
-      expect(r.template, 'ad/*');
+      final r = m.parse('https://example.com/product/$u')!;
+      expect(r.template, 'product/*');
       expect(r.path, [u]);
     });
 
     test('unknown path → null', () {
-      expect(m.parse('https://allinloop.com/nope/x'), isNull);
+      expect(m.parse('https://example.com/nope/x'), isNull);
     });
   });
 
@@ -37,42 +37,42 @@ void main() {
   // which branch matched, and printRoute re-selects it via `branches`. This is the
   // exact runtime path the generated parseLink/toUri delegates to.
   group('link union slot (branch round-trip)', () {
-    final user = SegBuilder.forScreen('user')
+    final author = SegBuilder.forScreen('author')
       ..children = {
         slots({Codec.literal('me'), Codec.uuid, Codec.username})
       };
-    final root = linkRoot({user});
-    final spec = LinkSpec([DomainNode('https://allinloop.com', root)]);
+    final root = linkRoot({author});
+    final spec = LinkSpec([DomainNode('https://example.com', root)]);
     final m = LinkMatcher(spec);
 
     test('literal branch matches with index 0 and no payload to read', () {
-      final r = m.parse('https://allinloop.com/user/me')!;
-      expect(r.template, 'user/*');
+      final r = m.parse('https://example.com/author/me')!;
+      expect(r.template, 'author/*');
       expect(r.branches, [0]);
       expect(r.path, ['me']);
     });
 
     test('uuid branch matches with index 1', () {
       const u = '550e8400-e29b-41d4-a716-446655440000';
-      final r = m.parse('https://allinloop.com/user/$u')!;
+      final r = m.parse('https://example.com/author/$u')!;
       expect(r.branches, [1]);
       expect(r.path, [u]);
     });
 
     test('username branch matches with index 2', () {
-      final r = m.parse('https://allinloop.com/user/ada')!;
+      final r = m.parse('https://example.com/author/ada')!;
       expect(r.branches, [2]);
       expect(r.path, ['ada']);
     });
 
     test('printRoute re-encodes the chosen branch', () {
       expect(
-        m.printRoute(template: 'user/*', path: ['me'], branches: [0]),
-        'https://allinloop.com/user/me',
+        m.printRoute(template: 'author/*', path: ['me'], branches: [0]),
+        'https://example.com/author/me',
       );
       expect(
-        m.printRoute(template: 'user/*', path: ['ada'], branches: [2]),
-        'https://allinloop.com/user/ada',
+        m.printRoute(template: 'author/*', path: ['ada'], branches: [2]),
+        'https://example.com/author/ada',
       );
     });
   });

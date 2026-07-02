@@ -3,7 +3,7 @@ import 'package:test/test.dart';
 
 // A miniature social-app tree: tabs, a profile cycle, and a leaf settings branch.
 enum S with ScreenNodeBase<S, Object> {
-  home, feed, settings, language, profile, friends, chat;
+  home, feed, settings, language, profile, friends, review;
 
   // Pure-VM test: W is bound to Object, widget is irrelevant to the grammar.
   @override
@@ -12,7 +12,7 @@ enum S with ScreenNodeBase<S, Object> {
   static S _userProfile() => profile({
         profile.cycled,
         friends({profile.cycled}),
-        chat({profile.cycled}),
+        review({profile.cycled}),
       });
 
   static NavSpec spec() => NavSpec({
@@ -99,15 +99,15 @@ void main() {
 
     test('keep/forget set per-screen liveness when parked', () {
       final s = NavSpec({
-        S.home({S.profile.keep({S.friends, S.chat.forget()})})
+        S.home({S.profile.keep({S.friends, S.review.forget()})})
       });
       expect(s.keeps, contains(S.profile));
-      expect(s.forgets, contains(S.chat));
+      expect(s.forgets, contains(S.review));
       expect(s.retains(S.home), isTrue); // tab has a keep → retained when parked
       expect(s.keptWhenParked(S.home), isFalse); // above the keep → freed
       expect(s.keptWhenParked(S.profile), isTrue); // the keep itself → live
       expect(s.keptWhenParked(S.friends), isTrue); // under the keep → live
-      expect(s.keptWhenParked(S.chat), isFalse); // forget carves it back out
+      expect(s.keptWhenParked(S.review), isFalse); // forget carves it back out
     });
 
     test('redundant keep/forget is a build error', () {
@@ -222,12 +222,12 @@ void main() {
 
   group('resolveGo ladder', () {
     test('rung 1: first recurrence is NOT a repeat — pushes a new page', () {
-      // profile<a> -> chat<a> -> back to profile<a> via the chat header
+      // profile<a> -> review<a> -> back to profile<a> via the review header
       final s = S.spec();
       final stack = [
         s.entry(S.home),
         s.entry(S.profile, 'a'),
-        s.entry(S.chat, ('x', 'a')),
+        s.entry(S.review, ('x', 'a')),
       ];
       final r = resolveGo(s, stack, S.profile, 'a');
       expect(r.popCount, 0);
@@ -243,15 +243,15 @@ void main() {
     });
 
     test('rung 1: completing a repeated block collapses to its previous occurrence', () {
-      // up<a>/chat<a>/up<a> + chat<a> -> period 2: pop back to chat<a>
+      // up<a>/review<a>/up<a> + review<a> -> period 2: pop back to review<a>
       final s = S.spec();
       final stack = [
         s.entry(S.home),
         s.entry(S.profile, 'a'),
-        s.entry(S.chat, ('x', 'a')),
+        s.entry(S.review, ('x', 'a')),
         s.entry(S.profile, 'a'),
       ];
-      final r = resolveGo(s, stack, S.chat, ('x', 'a'));
+      final r = resolveGo(s, stack, S.review, ('x', 'a'));
       expect(r.popCount, 1);
       expect(r.pushes, isEmpty);
     });
@@ -332,13 +332,13 @@ void main() {
 
   group('stacked back-edge', () {
     test('cycled folds a completed cycle; stacked pushes a fresh instance', () {
-      final cycled = NavSpec({S.profile({S.chat({S.profile.cycled})})});
-      final stacked = NavSpec({S.profile({S.chat({S.profile.stacked})})});
+      final cycled = NavSpec({S.profile({S.review({S.profile.cycled})})});
+      final stacked = NavSpec({S.profile({S.review({S.profile.stacked})})});
       List<StackEntry> stk(NavSpec s) => [
             s.entry(S.profile, 'a'),
-            s.entry(S.chat, ('x', 'a')),
+            s.entry(S.review, ('x', 'a')),
             s.entry(S.profile, 'a'),
-            s.entry(S.chat, ('x', 'a')),
+            s.entry(S.review, ('x', 'a')),
           ];
       final c = resolveGo(cycled, stk(cycled), S.profile, 'a');
       expect(c.popCount, 1); // folds back to the previous occurrence
@@ -386,7 +386,7 @@ void main() {
 
     test('pop until absent target fails', () {
       final s = S.spec();
-      expect(resolvePop([s.entry(S.home)], S.chat), isNull);
+      expect(resolvePop([s.entry(S.home)], S.review), isNull);
     });
   });
 

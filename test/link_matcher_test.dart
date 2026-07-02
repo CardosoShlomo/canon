@@ -3,21 +3,21 @@ import 'package:test/test.dart';
 
 enum Sort { asc, desc }
 
-// /user/me                       (static, leaf)
-// /user/<uuid|username>?loop     (slot union, flag query)
+// /author/me                       (static, leaf)
+// /author/<uuid|username>?loop     (slot union, flag query)
 // /search?q=&sort=&tag=&tag=     (required single, optional enum, list)
 final spec = LinkSpec([
   DomainNode(
     'https://example.com',
     LinkNode(statics: [
       StaticEdge(
-        'user',
+        'author',
         LinkNode(
           statics: [StaticEdge('me', LinkNode(name: 'userMe', endpoint: true))],
           slot: SlotEdge(
             [Codec.uuid, Codec.string],
             LinkNode(
-              name: 'user',
+              name: 'author',
               query: ParamSchema(
                   [KeyDef('loop', mandatory: false)]), // codec null => flag
             ),
@@ -41,35 +41,35 @@ final m = LinkMatcher(spec);
 void main() {
   group('phase 1 — committed fallthrough', () {
     test('static beats slot', () {
-      expect(m.parse('https://example.com/user/me')!.name, 'userMe');
+      expect(m.parse('https://example.com/author/me')!.name, 'userMe');
     });
     test('committed static does NOT backtrack to slot', () {
       // me commits; me is a leaf; /posts has no edge => null (not username "me")
-      expect(m.parse('https://example.com/user/me/posts'), isNull);
+      expect(m.parse('https://example.com/author/me/posts'), isNull);
     });
     test('union: uuid branch first', () {
       const u = '550e8400-e29b-41d4-a716-446655440000';
-      final r = m.parse('https://example.com/user/$u')!;
-      expect(r.name, 'user');
+      final r = m.parse('https://example.com/author/$u')!;
+      expect(r.name, 'author');
       expect(r.path, [u]);
     });
     test('union: falls through to username', () {
-      final r = m.parse('https://example.com/user/ada')!;
-      expect(r.name, 'user');
+      final r = m.parse('https://example.com/author/ada')!;
+      expect(r.name, 'author');
       expect(r.path, ['ada']);
     });
     test('unknown domain => null', () {
-      expect(m.parse('https://evil.com/user/ada'), isNull);
+      expect(m.parse('https://evil.com/author/ada'), isNull);
     });
     test('host boundary — no prefix spoofing', () {
-      expect(m.parse('https://example.com.evil.com/user/ada'), isNull);
-      expect(m.parse('https://example.community/user/ada'), isNull);
+      expect(m.parse('https://example.com.evil.com/author/ada'), isNull);
+      expect(m.parse('https://example.community/author/ada'), isNull);
     });
     test('scheme/host case-insensitive', () {
-      expect(m.parse('HTTPS://EXAMPLE.com/user/ada')!.name, 'user');
+      expect(m.parse('HTTPS://EXAMPLE.com/author/ada')!.name, 'author');
     });
     test('wrong scheme => null', () {
-      expect(m.parse('http://example.com/user/ada'), isNull);
+      expect(m.parse('http://example.com/author/ada'), isNull);
     });
     test('non-endpoint root => null', () {
       expect(m.parse('https://example.com/'), isNull);
@@ -78,9 +78,9 @@ void main() {
 
   group('phase 2 — params', () {
     test('flag absent / present', () {
-      expect(m.parse('https://example.com/user/ada')!.query['loop'], false);
+      expect(m.parse('https://example.com/author/ada')!.query['loop'], false);
       expect(
-          m.parse('https://example.com/user/ada?loop')!.query['loop'], true);
+          m.parse('https://example.com/author/ada?loop')!.query['loop'], true);
     });
     test('required single missing => null', () {
       expect(m.parse('https://example.com/search'), isNull);
@@ -104,10 +104,10 @@ void main() {
 
   group('round-trip (print ∘ parse == identity on canonical)', () {
     for (final url in [
-      'https://example.com/user/me',
-      'https://example.com/user/550e8400-e29b-41d4-a716-446655440000',
-      'https://example.com/user/ada',
-      'https://example.com/user/ada?loop',
+      'https://example.com/author/me',
+      'https://example.com/author/550e8400-e29b-41d4-a716-446655440000',
+      'https://example.com/author/ada',
+      'https://example.com/author/ada?loop',
       'https://example.com/search?q=hello&sort=desc&tag=a&tag=b',
     ]) {
       test(url, () => expect(m.print(m.parse(url)!), url));

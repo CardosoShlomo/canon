@@ -8,20 +8,20 @@ import 'package:test/test.dart';
 enum S with ScreenNode<S> {
   home,
   settings,
-  user;
+  author;
 
   @override
   Widget get widget => const SizedBox.shrink();
 
   @override
-  Codec<Object?>? get id => this == user ? Codec.uuid : null;
+  Codec<Object?>? get id => this == author ? Codec.uuid : null;
 }
 
 void main() {
   final graph = NavGraph(
     {
       S.home({S.settings()}),
-      S.user(),
+      S.author(),
     },
     seedChain: const _Init([(S.home, null)]),
     pageOf: (w, c, k) => MaterialPage(child: w),
@@ -34,12 +34,12 @@ void main() {
   });
 
   test('an id-bearing segment appends its encoded token', () {
-    expect(graph.encodeNavUrl('https://x.com', [S.user], [uuid]),
-        'https://x.com/user/$uuid');
+    expect(graph.encodeNavUrl('https://x.com', [S.author], [uuid]),
+        'https://x.com/author/$uuid');
   });
 
   test('a value the codec rejects throws (would be unparseable)', () {
-    expect(() => graph.encodeNavUrl('https://x.com', [S.user], ['not-a-uuid']),
+    expect(() => graph.encodeNavUrl('https://x.com', [S.author], ['not-a-uuid']),
         throwsArgumentError);
   });
 }
