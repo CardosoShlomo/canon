@@ -168,6 +168,10 @@ final class SlotBuilder with _Chain {
 SlotBuilder slot(Codec<Object?> codec) => SlotBuilder._(
     codec is UnionCodec ? [...codec.branches] : [codec]);
 
+/// A union slot from an explicit codec set — `slots({literal('me'), uuid})`,
+/// tried in order (first match wins).
+SlotBuilder slots(Set<Codec<Object?>> codecs) => SlotBuilder._([...codecs]);
+
 /// Query/fragment key names — enum values mixing this in. A bare value is a
 /// flag; `Key(codec)` is a value/list.
 mixin QueryKeyBase on Enum implements QueryTerm {

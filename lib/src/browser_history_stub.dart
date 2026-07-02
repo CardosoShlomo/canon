@@ -2,9 +2,6 @@
 /// directly, so none of this is reachable (all calls are `kIsWeb`-gated).
 bool get isBrowser => false;
 
-Future<void> enableMultiEntryHistory() async {}
-void usePathUrls() {}
-
 String currentPath() => '/';
 void historyGo(int delta) {}
 int historyLength() => 0;

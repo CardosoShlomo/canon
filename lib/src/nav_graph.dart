@@ -1,9 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' show MaterialPage;
-import 'package:flutter/widgets.dart';
+import 'package:meta/meta.dart';
 
 import 'package:canon_codec/canon_codec.dart';
 
@@ -14,9 +11,20 @@ import 'link_matcher.dart';
 import 'link_spec.dart';
 import 'screen_node.dart';
 
-/// Default page when the consumer gives no `pageOf`: a platform Material page.
-Page<void> _defaultPageOf(Widget widget, PageCtx ctx, LocalKey key) =>
-    MaterialPage<void>(key: key, child: widget);
+/// What the FLUTTER layer plugs into the pure engine (canon_flutter's
+/// delegate implements it): rebuild triggers and frame scheduling. Every hook
+/// is a no-op until a host attaches — headless (server, test) graphs simply
+/// never attach one.
+abstract interface class NavHost {
+  /// The stack changed structurally — rebuild the page list.
+  void refresh();
+
+  /// Face-only change (same structure) — repaint without a rebuild pass.
+  void notify();
+
+  /// A commit finished while the host was mid-build.
+  void completeRebuild();
+}
 
 /// The shape of a committed navigation, derived from the active scope's stack
 /// delta: [forward] grew the stack, [backward] shrank it, [roundTrip] did both
@@ -107,156 +115,8 @@ final class Navigation {
 }
 
 /// Default when the consumer gives no `observers`.
-List<NavigatorObserver> _noObservers() => const [];
+List<Object> _noObservers() => const [];
 
-/// The spec-enum contract: a screen family carrying the grammar AND a `Widget`.
-/// Binds the engine's abstract widget slot to Flutter's `Widget`, so consumers
-/// write the clean form and `Widget get widget` is required:
-///   `enum _Screens with ScreenNode<_Screens> { ... final Widget widget; }`
-typedef ScreenNode<S extends ScreenNodeBase<S, Widget>> = ScreenNodeBase<S, Widget>;
-
-/// A sub-enum's contract: like [ScreenNode] but the widget is OPTIONAL, so a row
-/// can be a bare ref to an owner screen of the same name (the owner carries the
-/// widget). Sub-enums mix this in; the trunk keeps [ScreenNode] (widget required),
-/// so the trunk can never be a ref.
-typedef SubScreenNode<S extends ScreenNodeBase<S, Widget?>>
-    = ScreenNodeBase<S, Widget?>;
-
-/// The page's grammar identity and transition policy inputs.
-final class PageCtx {
-  const PageCtx(this.screen, {this.animate = true, this.from});
-
-  /// The screen this page renders. Ids are read inside the screen via the
-  /// generated `context.idOf(...)`, not here — pageOf never sees a raw id.
-  final Enum screen;
-
-  /// False for pages that materialized mid-chain — suppresses their transition.
-  final bool animate;
-
-  /// Top screen when this page was pushed.
-  final Enum? from;
-}
-
-/// Scopes a page's screen and id to its subtree, and gates its content: while
-/// the tab is active everything renders; once parked, only screens that are
-/// kept-when-parked (`keep`/`forget`) keep their real content — the rest
-/// collapse to a `SizedBox` (freed, rebuilt fresh on return). With no liveness
-/// in scope it always renders, so consumers not using it just keep all alive.
-/// Internal: canon wraps each page in this (see `_buildPage`). Consumers never
-/// construct it — they read their screen via the generated `context.idOf`/
-/// `context.screen`, which route through the statics here.
-@internal
-final class ScreenScope extends StatelessWidget {
-  const ScreenScope({super.key, required this.entry, required this.child});
-
-  final StackEntry entry;
-  final Widget child;
-
-  /// The screen this context is under. Carries no id — read ids only via the
-  /// typed [idOf], so a raw `Object?` id is never exposed to screen code.
-  static Enum of(BuildContext context) => _entryOf(context).screen;
-
-  static StackEntry _entryOf(BuildContext context) {
-    final scope = context.getInheritedWidgetOfExactType<_ScreenEntry>();
-    assert(scope != null, 'no ScreenScope above this context');
-    return scope!.entry;
-  }
-
-  /// The typed id of screen [spec] this context is under. The single sanctioned
-  /// id read; an id-bearing screen always has its id, so [T] is non-null.
-  static T idOf<T>(BuildContext context, Enum spec) {
-    final entry = _entryOf(context);
-    assert(identical(entry.screen, spec),
-        'idOf(${spec.name}) read under ${entry.screen.name}');
-    return entry.id as T;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final live = _ScopeLiveness.of(context);
-    final show = live == null || live.active || live.kept(entry.screen);
-    return _ScreenEntry(
-      entry: entry,
-      child: show ? child : const SizedBox.shrink(),
-    );
-  }
-}
-
-/// Carries the page's grammar entry to descendants (the `of` lookup).
-final class _ScreenEntry extends InheritedWidget {
-  const _ScreenEntry({required this.entry, required super.child});
-
-  final StackEntry entry;
-
-  @override
-  bool updateShouldNotify(_ScreenEntry oldWidget) => false;
-}
-
-/// Per-scope liveness the delegate provides: whether this tab is active, and
-/// which of its screens stay live while parked. A flip of [active] re-gates the
-/// scope's `ScreenScope`s.
-final class _ScopeLiveness extends InheritedWidget {
-  const _ScopeLiveness(
-      {required this.active, required this.kept, required super.child});
-
-  final bool active;
-  final bool Function(Enum) kept;
-
-  static _ScopeLiveness? of(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<_ScopeLiveness>();
-
-  @override
-  bool updateShouldNotify(_ScopeLiveness oldWidget) => active != oldWidget.active;
-}
-
-/// Reactive view-state. Widgets depend on a single key aspect (`q:screen.key` /
-/// `f:screen.key`) and rebuild ONLY when that key is added, removed, or changed —
-/// not on unrelated view-state or navigation. Provided above the Navigators.
-final class _ViewModel extends InheritedModel<String> {
-  const _ViewModel({required this.snapshot, required super.child});
-
-  final Map<String, Object?> snapshot;
-
-  static Object? read(BuildContext context, String aspect) =>
-      InheritedModel.inheritFrom<_ViewModel>(context, aspect: aspect)
-          ?.snapshot[aspect];
-
-  // Subscribe to a (screen, key) across both URL parts (a key lives in exactly
-  // one; the other aspect never fires) and return its live value.
-  static Object? readKey(BuildContext context, Enum screen, String key) {
-    final q = read(context, 'q:${screen.name}.$key');
-    final f = read(context, 'f:${screen.name}.$key');
-    return q ?? f;
-  }
-
-  @override
-  bool updateShouldNotify(_ViewModel old) => !mapEquals(snapshot, old.snapshot);
-
-  @override
-  bool updateShouldNotifyDependent(_ViewModel old, Set<String> aspects) =>
-      aspects.any((a) => snapshot[a] != old.snapshot[a]);
-}
-
-/// Reactive, screen-local QUERY view-state. `Query.of<String>(context,
-/// FeedKeys.category)` returns the value for the screen this context is under AND
-/// subscribes the widget to that one key — it rebuilds only when the key is added,
-/// removed, or changed. The key comes from a [QueryKeyBase] enum.
-abstract final class Query {
-  static T? of<T>(BuildContext context, QueryKeyBase key) =>
-      _ViewModel.read(context, 'q:${ScreenScope.of(context).name}.${key.name}')
-          as T?;
-}
-
-/// Like [Query], but for the URL FRAGMENT view-state axis.
-abstract final class Fragment {
-  static T? of<T>(BuildContext context, QueryKeyBase key) =>
-      _ViewModel.read(context, 'f:${ScreenScope.of(context).name}.${key.name}')
-          as T?;
-}
-
-/// Reactive placement membership. Widgets depend on a single screen aspect and
-/// rebuild only when THAT screen enters or leaves the active placement chain
-/// (becomes on/at) — not on unrelated navigation.
 /// One view-state condition term in a selector (`.category('books')`, `.not.byFav`).
 /// The generated per-screen `…Cond` types implement this; `Screen.on`/`context.on`
 /// gate on `test(liveValue)`, and [key] is the aspect a reactive read subscribes to.
@@ -265,84 +125,6 @@ abstract interface class ViewCond {
   bool test(Object? value);
 }
 
-/// Aspect wrapper so `isCurrent` (top==screen) and `isOn` (chain∋screen) can both
-/// key on a screen without colliding in [_PlacementModel.updateShouldNotifyDependent].
-class _CurrentAspect {
-  const _CurrentAspect(this.screen);
-  final Enum screen;
-  @override
-  bool operator ==(Object o) => o is _CurrentAspect && o.screen == screen;
-  @override
-  int get hashCode => screen.hashCode;
-}
-
-final class _PlacementModel extends InheritedModel<Object> {
-  const _PlacementModel(
-      {required this.chain, required this.top, required super.child});
-
-  final Set<Enum> chain;
-  final Enum top;
-
-  static bool isOn(BuildContext context, Enum screen) =>
-      InheritedModel.inheritFrom<_PlacementModel>(context, aspect: screen)
-          ?.chain
-          .contains(screen) ??
-      false;
-
-  static bool isCurrent(BuildContext context, Enum screen) =>
-      InheritedModel.inheritFrom<_PlacementModel>(context,
-              aspect: _CurrentAspect(screen))
-          ?.top ==
-      screen;
-
-  @override
-  bool updateShouldNotify(_PlacementModel old) =>
-      top != old.top || !setEquals(chain, old.chain);
-
-  @override
-  bool updateShouldNotifyDependent(_PlacementModel old, Set<Object> aspects) {
-    for (final a in aspects) {
-      if (a is _CurrentAspect) {
-        if ((top == a.screen) != (old.top == a.screen)) return true;
-      } else if (a is Enum) {
-        if (chain.contains(a) != old.chain.contains(a)) return true;
-      }
-    }
-    return false;
-  }
-}
-
-/// Reactive placement queries. `Placement.isOn(context, V.feed)` → is that screen
-/// anywhere on the active chain; `Placement.isCurrent(context, V.feed)` → is it the
-/// foreground top. Each rebuilds the widget only when its own status flips. The
-/// generated `Screen.of(context, …)` / `Screen.isCurrentOf` forward here.
-abstract final class Placement {
-  static bool isOn(BuildContext context, Enum screen) =>
-      _PlacementModel.isOn(context, screen);
-  static bool isCurrent(BuildContext context, Enum screen) =>
-      _PlacementModel.isCurrent(context, screen);
-
-  /// The current foreground screen, BROADLY reactive — the widget rebuilds on any
-  /// placement change. Backs the generated `Screen.of(context)` switch-to-render.
-  static Enum? current(BuildContext context) =>
-      InheritedModel.inheritFrom<_PlacementModel>(context)?.top;
-}
-
-/// Reactive evaluation of a selector's view-state conditions — subscribes the
-/// widget to exactly the keys referenced (so it rebuilds when they change) and
-/// returns whether they all hold. Backs the generated `context.on`/`context.current`.
-abstract final class ViewMatch {
-  static bool conds(BuildContext context, Enum screen, List<ViewCond> conds) {
-    for (final c in conds) {
-      if (!c.test(_ViewModel.readKey(context, screen, c.key))) return false;
-    }
-    return true;
-  }
-}
-
-/// Chain handle: hops queued in one synchronous expression commit together on
-/// a microtask — one diff, one animation.
-@internal
 final class Nav {
   Nav._(this._graph);
 
@@ -353,18 +135,26 @@ final class Nav {
   Nav pop([Enum? until]) => _graph.pop(until);
 }
 
-class _Slot {
-  _Slot(this.entry, this.page);
+/// One stack position plus its lazily-built page: the pure engine only records
+/// the entry and the build HINTS; the attached [NavHost] builds and caches the
+/// page on first read.
+@internal
+class NavSlot {
+  NavSlot(this.entry, {this.animate = true, this.from});
 
   final StackEntry entry;
-  final Page<void> page;
+  final bool animate;
+  final Enum? from;
+
+  /// The host's page cache — opaque to the engine.
+  Object? page;
 }
 
-/// One live stack: a trunk screen's pages plus its Navigator identity.
-class _Scope {
-  final List<_Slot> slots = [];
-  final GlobalKey<NavigatorState> navKey = GlobalKey<NavigatorState>();
-  final HeroController hero = HeroController();
+/// One live stack: a trunk screen's slots. The host hangs its per-scope
+/// identity (navigator key, hero controller) off this object.
+@internal
+class NavScope {
+  final List<NavSlot> slots = [];
 }
 
 /// The batch's working state: per-scope stacks plus the active scope.
@@ -466,22 +256,21 @@ List<Enum?>? _compositeSources(GrammarNode node) {
 final class NavGraph {
   NavGraph(
     Set<TreeNode> trunkScreens, {
-    this.pageOf = _defaultPageOf,
+    this.pageOf,
     Object? root,
     RootScreenBase? seedChain,
-    this._observers = _noObservers,
+    this.observers = _noObservers,
   })  : assert((root == null) != (seedChain == null),
             'pass exactly one of `root:` (the boot widget) or `seedChain:`'),
         spec = NavSpec(trunkScreens) {
     _linkRoot = _linkRootOf(trunkScreens, spec);
     _collectViewSchema();
-    delegate = NavDelegate._(this);
     _bootWidget = root;
     final chain = root != null
         ? const <(Enum, Object?)>[(BootScreen.root, null)]
         : seedChain!.chain;
     _activeTrunk = chain.first.$1;
-    final scope = _Scope();
+    final scope = NavScope();
     var node = root != null ? _bootNode : spec.canonical[_activeTrunk]!;
     Enum? from;
     for (var i = 0; i < chain.length; i++) {
@@ -491,7 +280,7 @@ final class NavGraph {
             (throw StateError('invalid root chain at "${screen.name}"'));
       }
       final entry = StackEntry(node, id);
-      scope.slots.add(_Slot(entry, _buildPage(entry, animate: false, from: from)));
+      scope.slots.add(NavSlot(entry, animate: false, from: from));
       from = screen;
     }
     _scopes[_activeTrunk] = scope;
@@ -505,17 +294,14 @@ final class NavGraph {
   /// bypassed. Reads the launch URL and registers the back/forward listener.
   bool _ownsHistory = false;
   void _initWebHistory() {
-    if (!kIsWeb || !isBrowser) return;
+    if (!isBrowser) return;
     _ownsHistory = true;
     // canon speaks the History API directly. Keep the engine in multi-entry so it
     // never eats browser-back (single-entry intercepts it), then canon owns
     // push/replace/go(-N) and reads back/forward via popstate.
-    WidgetsFlutterBinding.ensureInitialized();
-    usePathUrls(); // canon owns the URL strategy: clean paths, before the URL read
-    enableMultiEntryHistory();
-    // A Navigator init during the first frame can re-assert single-entry; re-pin
-    // multi-entry after the frame so it sticks.
-    WidgetsBinding.instance.addPostFrameCallback((_) => enableMultiEntryHistory());
+    // URL strategy + multi-entry mode are FLUTTER-engine settings — the host
+    // applies them on attach (currentPath below reads window.location raw, so
+    // the strategy needn't be set before the URL read).
     onPopState(_onPopState);
     bootUrl = currentPath();
     // Default the cold base by the launch URL: a bare `/` is a plain app-open
@@ -566,7 +352,7 @@ final class NavGraph {
     final kind = _floorKind(state);
     // 1. We walked back to the anchor to complete a divergent switch.
     if (_rebuild != null) {
-      delegate._completeRebuild();
+      _host?.completeRebuild();
       return;
     }
     // 2. A floor entry: we're now at the floor (index 0) — record that so the
@@ -595,7 +381,7 @@ final class NavGraph {
         _floorFace = FloorKind.sentinel;
         historyGo(-1); // leave the app; no-op on a fresh tab → the face stays
       }
-      delegate._notify(); // show the face (no history write)
+      _host?.notify(); // show the face (no history write)
       return;
     }
     // 3. A nav entry → restore canon to it; adopt its floor + rebuild the view.
@@ -644,11 +430,11 @@ final class NavGraph {
 
   /// The current front screen's widget (the top of the live stack), or null while
   /// booting. A base widget can `return Screen.root.front` to keep showing it.
-  Widget? get frontWidget {
+  Object? get frontWidget {
     final top = _activeScope.slots.lastOrNull?.entry.screen;
     return top == null || top == BootScreen.root
         ? null
-        : (top as WidgetScreen).widget as Widget;
+        : (top as WidgetScreen).widget;
   }
 
   /// Whether a synthetic floor (made on a trunk-switch) bounces out of the app
@@ -851,10 +637,13 @@ final class NavGraph {
     return base + (q.isEmpty ? '' : '?$q') + (f.isEmpty ? '' : '#$f');
   }
 
-  /// Builds a page for a screen's [widget] (already resolved to the owner's
-  /// non-null widget; the screen + id are in `ctx.entry`).
-  final Page<void> Function(Widget widget, PageCtx ctx, LocalKey key) pageOf;
-  final List<NavigatorObserver> Function() _observers;
+  /// Builds a page for a screen's widget — the FLUTTER layer's signature
+  /// (`Page Function(Widget, PageCtx, Object key)`), stored untyped so the pure
+  /// engine never names Flutter types. Null → the flutter host's default page.
+  final Function? pageOf;
+
+  /// Navigator observers factory — opaque here; the flutter host reads it.
+  final List<Object> Function() observers;
 
   /// Screen-name → screen, for restore. Names are unique (refs collapse to one
   /// owner), so this is total over the live tree.
@@ -862,16 +651,19 @@ final class NavGraph {
     for (final s in spec.screens) s.name: s,
   };
 
-  late final NavDelegate delegate;
+  /// The attached flutter host (canon_flutter's delegate); null while headless.
+  NavHost? _host;
 
-  /// A standalone nav host for `MaterialApp(home: ...)` — no Router, no
-  /// RouteInformation channel (URLs/deep-links never drive the stack). Owns
-  /// system back and snapshot restoration (always on; [restorationId] is the
-  /// stable storage key, override only to avoid a collision).
-  Widget manager({String restorationId = 'nav'}) =>
-      ScreenManager._(this, restorationId);
+  /// Whether canon owns the browser history on this platform — the host reads
+  /// it on attach to apply the flutter-engine settings (URL strategy,
+  /// multi-entry mode).
+  @internal
+  bool get ownsHistory => _ownsHistory;
 
-  final Map<Enum, _Scope> _scopes = {};
+  @internal
+  void attachHost(NavHost host) => _host = host;
+
+  final Map<Enum, NavScope> _scopes = {};
 
   /// Visited trunks in spec order — IndexedStack children stay stable.
   final List<Enum> _visited = [];
@@ -965,7 +757,7 @@ final class NavGraph {
     } else {
       map[key] = value;
     }
-    delegate._refresh();
+    _host?.refresh();
   }
 
   /// Flattened view-state for the reactive [_ViewModel]: `q:screen.key` /
@@ -1064,7 +856,7 @@ final class NavGraph {
   /// Registers a SYNCHRONOUS side-effect listener fired AFTER each navigation
   /// commits (new top settled), BEFORE its transition animates. Returns a
   /// disposer. Prefer [navigations] unless you need commit-phase synchronicity.
-  VoidCallback observe(void Function(Enum from, Enum to) fn) {
+  void Function() observe(void Function(Enum from, Enum to) fn) {
     _navListeners.add(fn);
     return () => _navListeners.remove(fn);
   }
@@ -1152,14 +944,14 @@ final class NavGraph {
     if (state['v'] != structureSignature) return false;
     final scopes = state['scopes'];
     if (scopes is! Map) return false;
-    final built = <Enum, _Scope>{};
+    final built = <Enum, NavScope>{};
     for (final entry in scopes.entries) {
       final trunk = _byName[entry.key];
       final rows = entry.value;
       if (trunk == null || !spec.canonical.containsKey(trunk) || rows is! List) {
         continue;
       }
-      final scope = _Scope();
+      final scope = NavScope();
       var node = spec.canonical[trunk]!;
       Enum? from;
       for (var i = 0; i < rows.length; i++) {
@@ -1183,7 +975,7 @@ final class NavGraph {
           if (id == null) break;
         }
         final se = StackEntry(node, id);
-        scope.slots.add(_Slot(se, _buildPage(se, animate: false, from: from)));
+        scope.slots.add(NavSlot(se, animate: false, from: from));
         from = screen;
       }
       if (scope.slots.isNotEmpty) built[trunk] = scope;
@@ -1219,7 +1011,7 @@ final class NavGraph {
         }
       }
     }
-    delegate._refresh();
+    _host?.refresh();
     return true;
   }
 
@@ -1370,7 +1162,7 @@ final class NavGraph {
     if (segs.isEmpty) return false;
     final trunk = _byName[_urlUnkebab(segs.first)];
     if (trunk == null || !spec.canonical.containsKey(trunk)) return false;
-    final scope = _Scope();
+    final scope = NavScope();
     var node = spec.canonical[trunk]!;
     Enum? from;
     var i = 0;
@@ -1444,7 +1236,7 @@ final class NavGraph {
         }
       }
       final se = StackEntry(node, id);
-      scope.slots.add(_Slot(se, _buildPage(se, animate: false, from: from)));
+      scope.slots.add(NavSlot(se, animate: false, from: from));
       from = screen;
     }
     if (scope.slots.isEmpty) return false;
@@ -1466,7 +1258,7 @@ final class NavGraph {
       _decodeView(top, schema.query, uri.query);
       _decodeView(top, schema.fragment, uri.fragment);
     }
-    delegate._refresh();
+    _host?.refresh();
     return true;
   }
 
@@ -1494,17 +1286,16 @@ final class NavGraph {
     return chain;
   }
 
-  _Scope get _activeScope => _scopes[_activeTrunk]!;
+  NavScope get _activeScope => _scopes[_activeTrunk]!;
 
   StackEntry _seed(Enum trunk, [Object? id]) =>
       StackEntry(spec.canonical[trunk]!, id);
 
-  _Scope _scopeOf(Enum trunk, [Object? id]) => _scopes.putIfAbsent(trunk, () {
+  NavScope _scopeOf(Enum trunk, [Object? id]) => _scopes.putIfAbsent(trunk, () {
         _visited.add(trunk);
         _visited.sort((a, b) => a.index.compareTo(b.index));
-        return _Scope()
-          ..slots.add(_Slot(_seed(trunk, id),
-              _buildPage(_seed(trunk, id), animate: false, from: null)));
+        return NavScope()
+          ..slots.add(NavSlot(_seed(trunk, id), animate: false));
       });
 
   _Sim _ensureSim() => _sim ??= _Sim(
@@ -1680,13 +1471,10 @@ final class NavGraph {
       if (common == scope.slots.length && common == target.length) continue;
       scope.slots.removeRange(common, scope.slots.length);
       for (var i = common; i < target.length; i++) {
-        scope.slots.add(_Slot(
+        scope.slots.add(NavSlot(
           target[i],
-          _buildPage(
-            target[i],
-            animate: entry.key == sim.active && i == target.length - 1,
-            from: i == common ? from : target[i - 1].screen,
-          ),
+          animate: entry.key == sim.active && i == target.length - 1,
+          from: i == common ? from : target[i - 1].screen,
         ));
       }
     }
@@ -1708,30 +1496,33 @@ final class NavGraph {
       _scopes.remove(BootScreen.root);
       _visited.remove(BootScreen.root);
     }
-    delegate._refresh();
+    _host?.refresh();
   }
 
-  Page<void> _buildPage(StackEntry entry,
-      {required bool animate, required Enum? from}) {
-    final screen = entry.screen;
-    // canon owns the ScreenScope wrap, so the raw entry/id never reaches pageOf.
-    final widget = screen == BootScreen.root
-        ? _bootWidget as Widget
-        : (screen as WidgetScreen).widget as Widget;
-    final content = ScreenScope(entry: entry, child: widget);
-    return pageOf(
-      content,
-      PageCtx(screen, animate: animate, from: from),
-      screen == BootScreen.root
-          ? const ValueKey('__boot__')
-          : spec.isMulti(screen)
-              ? UniqueKey()
-              : ValueKey(screen.name),
-    );
-  }
+  /// The raw widget for [entry]'s screen (boot widget for the boot entry) —
+  /// the host wraps it (ScreenScope) and feeds `pageOf`.
+  @internal
+  Object widgetOf(StackEntry entry) => entry.screen == BootScreen.root
+      ? _bootWidget!
+      : (entry.screen as WidgetScreen).widget!;
+
+  /// The host's view of the live scopes.
+  @internal
+  NavScope get activeScope => _activeScope;
+
+  /// Visited trunks in spec order — IndexedStack children stay stable.
+  @internal
+  List<Enum> get visitedTrunks => _visited;
+
+  @internal
+  NavScope? scopeFor(Enum trunk) => _scopes[trunk];
+
+  @internal
+  Enum get activeTrunk => _activeTrunk;
 
   // The active Navigator removed a page on its own (gesture / system back).
-  void _onPageRemoved(Page<void> page) {
+  @internal
+  void onPageRemoved(Object page) {
     for (final scope in _scopes.values) {
       scope.slots.removeWhere((s) => identical(s.page, page));
     }
@@ -1739,324 +1530,165 @@ final class NavGraph {
 
   void _warnCanonical(String message) {
     assert(() {
-      debugPrint('[nav] $message');
+      print('[nav] $message');
       return true;
     }());
   }
-}
 
-final class NavDelegate extends RouterDelegate<Object>
-    with ChangeNotifier, PopNavigatorRouterDelegateMixin<Object> {
-  NavDelegate._(this._graph);
+  /// The consumer's boot widget (opaque here) — the host renders it on a bare
+  /// floor and for the boot entry.
+  @internal
+  Object? get bootWidget => _bootWidget;
 
-  final NavGraph _graph;
+  @internal
+  bool isMulti(Enum screen) => spec.isMulti(screen);
 
-  @override
-  GlobalKey<NavigatorState> get navigatorKey => _graph._activeScope.navKey;
-
-  void _notify() => notifyListeners();
-
-  @override
-  Widget build(BuildContext context) {
-    // On a bare floor (a bounce that found nothing behind), the live stack is
-    // stale — show the consumer's root widget, which reads `Screen.root.kind`.
-    if (_graph._floorFace != null) return _graph._bootWidget as Widget;
-    final visited = _graph._visited;
-    return _ViewModel(
-      snapshot: _graph.viewSnapshot(),
-      child: _PlacementModel(
-        chain: _graph.currentChain.toSet(),
-        top: _graph.current,
-        child: _buildStack(visited),
-      ),
-    );
-  }
-
-  Widget _buildStack(List<Enum> visited) {
-    return IndexedStack(
-      index: visited.indexOf(_graph._activeTrunk),
-      children: [
-        for (final trunk in visited)
-          _ScopeLiveness(
-            active: trunk == _graph._activeTrunk,
-            kept: _graph.spec.keptWhenParked,
-            child: TickerMode(
-              enabled: trunk == _graph._activeTrunk,
-              child: HeroControllerScope(
-                controller: _graph._scopes[trunk]!.hero,
-                child: Navigator(
-                  key: _graph._scopes[trunk]!.navKey,
-                  observers: _graph._observers(),
-                  pages: [for (final s in _graph._scopes[trunk]!.slots) s.page],
-                  onDidRemovePage: _graph._onPageRemoved,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  /// Null: canon drives the browser History API directly in [_refresh], so the
-  /// framework must not auto-report. Input arrives via canon's own popstate
-  /// listener, not the Router.
-  @override
-  RouteInformation? get currentConfiguration => null;
-
-  /// Cold-load / back / forward / refresh land here. Blob present (back/forward/
-  /// refresh) → restore it (truth). Blob absent (pasted/external cold URL) → the
-  /// nav-mirror reconcile (truncate-to-valid-prefix); a declared LINK is resolved
-  /// by the consumer's resolver off `Screen.initialUrl`, not here.
-  @override
-  Future<void> setNewRoutePath(Object configuration) {
-    if (configuration is RouteInformation) {
-      final state = configuration.state;
-      if (state is Map && state['s'] is Map) {
-        // Blob present (back/forward/refresh) → restore the nav-mirror (truth).
-        // `{bi, s}`: adopt the back-index, restore the snapshot. Browser-initiated:
-        // suppress the report so the forward stack survives.
-        _graph._suppressReport = true;
-        _graph._browserBack = (state['bi'] as num?)?.toInt() ?? _graph._browserBack;
-        _graph.restore((state['s'] as Map).cast<String, Object?>());
-        _graph._suppressReport = false;
+  /// Browser [RouteInformation] landed (cold-load / back / forward / refresh /
+  /// deep-link). Blob present → restore it (truth); absent → external URL: the
+  /// resolver, or the nav-mirror reconcile.
+  @internal
+  void routeFromBrowser(String url, Object? state) {
+    if (state is Map && state['s'] is Map) {
+      _suppressReport = true;
+      _browserBack = (state['bi'] as num?)?.toInt() ?? _browserBack;
+      restore((state['s'] as Map).cast<String, Object?>());
+      _suppressReport = false;
+    } else {
+      if (_booting) bootUrl = url;
+      if (_resolver != null) {
+        _resolver!(url);
       } else {
-        // Blob absent = an EXTERNAL link: a cold-start web URL or a mobile
-        // deep-link (Flutter routes both here). Record it for `Screen.initialUrl`
-        // and hand it to the single resolver — which writes `Screen.goX()`. With
-        // no resolver installed, fall back to the nav-mirror reconcile.
-        final url = configuration.uri.toString();
-        if (_graph._booting) _graph.bootUrl = url;
-        if (_graph._resolver != null) {
-          _graph._resolver!(url);
-        } else {
-          // No resolver installed: stash the launch url for one set later, and
-          // keep the legacy nav-mirror reconcile (a declared link is a no-op).
-          if (_graph._booting) _graph._pendingUrl = url;
-          _graph.applyUrl(url);
-        }
+        if (_booting) _pendingUrl = url;
+        applyUrl(url);
       }
     }
-    return SynchronousFuture(null);
   }
 
-  void _refresh() {
-    // Write the browser history directly. `_suppressReport` is set while restoring
-    // from a popstate landing, so we don't re-report what the browser just told us.
-    // Off-web / booting: nothing to write.
-    if (_graph._ownsHistory && !_graph._booting && !_graph._suppressReport) {
-      final n = _graph._activeScope.slots.length;
-      final canon = [for (var d = 0; d < n; d++) _graph.currentUrl(d)];
-      final prev = _graph._browserUrls;
+  /// Write the committed stack into the browser history (web only; no-op while
+  /// booting or restoring from a popstate landing). Returns true when a
+  /// popstate walk is pending — the host finishes via [completeHistoryRebuild]
+  /// once the browser lands.
+  @internal
+  void writeHistory() {
+    if (!_ownsHistory || _booting || _suppressReport) return;
+    final n = _activeScope.slots.length;
+    final canon = [for (var d = 0; d < n; d++) currentUrl(d)];
+    final prev = _browserUrls;
 
-      if (prev.isEmpty) {
-        // Cold-start. `anchor()` → a kept floor (one returnable entry at the
-        // launch URL; trunk-switches stack above it). Otherwise a plain base (its
-        // levels are entries; back past index 0 exits). Deep non-kept cold-start
-        // as a multi-level path is TODO.
-        if (_graph._rootKept) {
-          _graph._floor = FloorKind.kept;
-          _graph._floorUrl = canon.last;
-          historyReplace(canon.last, _graph._keptBlob(_graph.toState()));
-          _graph._browserUrls = [canon.last];
-          _graph._browserBack = 0;
-        } else {
-          // One entry showing the front (a cold-start can't fan into back-
-          // navigable entries on web — they'd be gesture-less/skippable).
-          historyReplace(canon.last, _graph._stateBlob(0, _graph.toState()));
-          _graph._browserUrls = [canon.last];
-          _graph._browserBack = 0;
-        }
-        notifyListeners();
+    if (prev.isEmpty) {
+      // Cold-start. `anchor()` → a kept floor (one returnable entry at the
+      // launch URL; trunk-switches stack above it). Otherwise a plain base (its
+      // levels are entries; back past index 0 exits). Deep non-kept cold-start
+      // as a multi-level path is TODO.
+      if (_rootKept) {
+        _floor = FloorKind.kept;
+        _floorUrl = canon.last;
+        historyReplace(canon.last, _keptBlob(toState()));
+      } else {
+        historyReplace(canon.last, _stateBlob(0, toState()));
+      }
+      _browserUrls = [canon.last];
+      _browserBack = 0;
+      return;
+    }
+    if (_lastCommitMode == CommitMode.replace) {
+      // Screen.replace.* — redirect: overwrite the current top, no new history.
+      final eff = [if (_floor != null) prev[0], ...canon];
+      historyReplace(eff.last, _navBlob(eff, eff.length - 1));
+      _browserUrls = eff;
+      _browserBack = eff.length - 1;
+      return;
+    }
+
+    // Decide the target browser path + where to start writing it + whether index
+    // 0 is a floor. A killable floor (fallthrough/sentinel) is dropped the moment
+    // a navigation gives us ≥2 levels to re-base on (the push truncates forward);
+    // a kept floor and the depth-1 case keep a floor.
+    final killable = _floor != null && _floor != FloorKind.kept;
+    late final List<String> path;
+    late final int from;
+    late final FloorKind? floorKind;
+
+    if (killable && canon.length >= 2) {
+      path = canon; // re-base bare at index 0, floor gone
+      from = 0;
+      floorKind = null;
+    } else {
+      final eff = [if (_floor != null) prev[0], ...canon];
+      var common = 0;
+      while (common < prev.length &&
+          common < eff.length &&
+          prev[common] == eff[common]) {
+        common++;
+      }
+      if (common == prev.length && common == eff.length) return; // identical
+      if (common == eff.length && prev.length > eff.length) {
+        historyGo(-(prev.length - eff.length)); // pure pop
         return;
       }
-      if (_graph._lastCommitMode == CommitMode.replace) {
-        // Screen.replace.* — redirect: overwrite the current top, no new history.
-        final eff = [if (_graph._floor != null) prev[0], ...canon];
-        historyReplace(eff.last, _navBlob(eff, eff.length - 1));
-        _graph._browserUrls = eff;
-        _graph._browserBack = eff.length - 1;
-        notifyListeners();
-        return;
-      }
-
-      // Decide the target browser path + where to start writing it + whether index
-      // 0 is a floor. A killable floor (fallthrough/sentinel) is dropped the moment
-      // a navigation gives us ≥2 levels to re-base on (the push truncates forward);
-      // a kept floor and the depth-1 case keep a floor.
-      final killable = _graph._floor != null && _graph._floor != FloorKind.kept;
-      late final List<String> path;
-      late final int from;
-      late final FloorKind? floorKind;
-
-      if (killable && canon.length >= 2) {
-        path = canon; // re-base bare at index 0, floor gone
-        from = 0;
-        floorKind = null;
-      } else {
-        final eff = [if (_graph._floor != null) prev[0], ...canon];
-        var common = 0;
-        while (common < prev.length && common < eff.length && prev[common] == eff[common]) {
-          common++;
-        }
-        if (common == prev.length && common == eff.length) {
-          notifyListeners();
-          return; // identical
-        }
-        if (common == eff.length && prev.length > eff.length) {
-          historyGo(-(prev.length - eff.length)); // pure pop
-          notifyListeners();
-          return;
-        }
-        if (common == prev.length) {
-          path = eff; // extension
-          from = common;
-          floorKind = _graph._floor;
-        } else if (common == 0) {
-          // Root-switch (no floor shared). ≥2 levels → re-base bare; a bare trunk →
-          // introduce a floor (can't truncate a single entry to one cleanly).
-          if (canon.length >= 2) {
-            path = canon;
-            from = 0;
-            floorKind = null;
-          } else {
-            path = ['/', ...canon];
-            from = 0;
-            floorKind = _graph._armedKind;
-          }
+      if (common == prev.length) {
+        path = eff; // extension
+        from = common;
+        floorKind = _floor;
+      } else if (common == 0) {
+        // Root-switch (no floor shared). ≥2 levels → re-base bare; a bare trunk →
+        // introduce a floor (can't truncate a single entry to one cleanly).
+        if (canon.length >= 2) {
+          path = canon;
+          from = 0;
+          floorKind = null;
         } else {
-          path = eff; // partial divergence: keep shared prefix, rebuild the tail
-          from = common;
-          floorKind = _graph._floor;
+          path = ['/', ...canon];
+          from = 0;
+          floorKind = _armedKind;
         }
-      }
-
-      _graph._rebuild = (path: path, from: from, floorKind: floorKind);
-      final toIndex = from == 0 ? 0 : from - 1;
-      final back = prev.length - 1 - toIndex;
-      if (back > 0) {
-        historyGo(-back);
       } else {
-        _completeRebuild();
+        path = eff; // partial divergence: keep shared prefix, rebuild the tail
+        from = common;
+        floorKind = _floor;
       }
     }
-    notifyListeners();
+
+    _rebuild = (path: path, from: from, floorKind: floorKind);
+    final toIndex = from == 0 ? 0 : from - 1;
+    final back = prev.length - 1 - toIndex;
+    if (back > 0) {
+      historyGo(-back);
+    } else {
+      completeHistoryRebuild();
+    }
   }
 
-  /// The nav-entry blob for browser index [i] of path [eff]: its nav depth is the
-  /// index minus the floor offset.
+  /// The nav-entry blob for browser index [i] of path [eff]: its nav depth is
+  /// the index minus the floor offset.
   Map<String, Object?> _navBlob(List<String> eff, int i) {
-    final navLevel = i - (_graph._floor != null ? 1 : 0);
-    return _graph._stateBlob(i, _graph.toState(activeDepth: navLevel + 1));
+    final navLevel = i - (_floor != null ? 1 : 0);
+    return _stateBlob(i, toState(activeDepth: navLevel + 1));
   }
 
-  /// Build `path[from..]` after the browser has walked back to the anchor (index
-  /// `from-1`, or index 0 when `from == 0`). The first write replaces (consumes
-  /// the bottom) only when `from == 0`; the rest push (truncating stale forward).
-  void _completeRebuild() {
-    final r = _graph._rebuild!;
-    _graph._rebuild = null;
-    _graph._floor = r.floorKind;
-    _graph._floorUrl = r.floorKind != null ? r.path.first : null;
+  /// Build `path[from..]` after the browser has walked back to the anchor
+  /// (index `from-1`, or index 0 when `from == 0`). The first write replaces
+  /// (consumes the bottom) only when `from == 0`; the rest push (truncating
+  /// stale forward).
+  @internal
+  void completeHistoryRebuild() {
+    final r = _rebuild!;
+    _rebuild = null;
+    _floor = r.floorKind;
+    _floorUrl = r.floorKind != null ? r.path.first : null;
     for (var i = r.from; i < r.path.length; i++) {
       final blob = i == 0 && r.floorKind != null
-          ? _graph._floorBlob(r.floorKind!)
+          ? _floorBlob(r.floorKind!)
           : _navBlob(r.path, i);
       if (i == r.from && r.from == 0) {
         historyReplace(r.path[i], blob);
       } else {
-        _graph._serial++;
+        _serial++;
         historyPush(r.path[i], blob);
       }
     }
-    _graph._browserUrls = r.path;
-    _graph._browserBack = r.path.length - 1;
+    _browserUrls = r.path;
+    _browserBack = r.path.length - 1;
   }
 }
 
-/// Parses incoming browser [RouteInformation] for the Router. Pass-through: the
-/// blob/URL split is decided in [NavDelegate.setNewRoutePath]. Pair with
-/// `Screen.delegate` under `MaterialApp.router`.
-final class CanonRouteParser extends RouteInformationParser<Object> {
-  const CanonRouteParser();
-
-  @override
-  Future<Object> parseRouteInformation(RouteInformation information) =>
-      SynchronousFuture(information);
-
-  @override
-  RouteInformation? restoreRouteInformation(Object configuration) =>
-      configuration is RouteInformation ? configuration : null;
-}
-
-/// Drop into `MaterialApp(home: ...)` via `Screen.manager()`. Hosts the same
-/// nav tree as the delegate but with no Router/RouteInformation channel, so URLs
-/// and deep-links can't drive the stack — handle links imperatively. Owns system
-/// back; with a restorationId, persists/restores the snapshot (no URLs).
-final class ScreenManager extends StatelessWidget {
-  const ScreenManager._(this._graph, this._restorationId);
-
-  final NavGraph _graph;
-  final String _restorationId;
-
-  @override
-  Widget build(BuildContext context) => RootRestorationScope(
-        restorationId: _restorationId,
-        child: _ManagerBody(_graph),
-      );
-}
-
-class _ManagerBody extends StatefulWidget {
-  const _ManagerBody(this.graph);
-
-  final NavGraph graph;
-
-  @override
-  State<_ManagerBody> createState() => _ManagerBodyState();
-}
-
-class _ManagerBodyState extends State<_ManagerBody>
-    with RestorationMixin, WidgetsBindingObserver {
-  final RestorableStringN _snap = RestorableStringN(null);
-  VoidCallback? _off;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  // Routes system back to the active scope's navigator (no Router needed).
-  @override
-  Future<bool> didPopRoute() => widget.graph.delegate.popRoute();
-
-  @override
-  String? get restorationId => 'canon_nav';
-
-  @override
-  void restoreState(RestorationBucket? oldBucket, bool initialRestore) {
-    registerForRestoration(_snap, 'stack');
-    final s = _snap.value;
-    if (s != null) {
-      widget.graph.restore(jsonDecode(s) as Map<String, Object?>);
-    }
-    _off ??= widget.graph
-        .observe((_, __) => _snap.value = jsonEncode(widget.graph.toState()));
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _off?.call();
-    _snap.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final d = widget.graph.delegate;
-    return AnimatedBuilder(
-      animation: d,
-      builder: (context, _) => d.build(context),
-    );
-  }
-}
