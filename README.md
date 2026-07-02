@@ -12,7 +12,7 @@ One grammar, both ends: it drives identical navigation on mobile and the web —
 
 ```dart
 import 'package:canon/canon.dart';
-part 'screen.nav.dart';
+part 'screen.canon.dart';
 
 @screens
 enum _Screens with ScreenNode<_Screens> {
@@ -56,7 +56,7 @@ enum _Screens with ScreenNode<_Screens> {
 enum _View with QueryKeyBase { text, sort, at, dirty }
 ```
 
-A row is `name(WidgetConst())` or `name(WidgetConst(), idCodec)`. One library-private `@screens` enum, one `NavGraph`, `part 'screen.nav.dart';` — that's the whole grammar. Codegen turns this tree into a typed `Screen` facade whose methods *are* its edges. Read this section and you've read the app's navigation; everything below maps to a line in it.
+A row is `name(WidgetConst())` or `name(WidgetConst(), idCodec)`. One library-private `@screens` enum, one `NavGraph`, `part 'screen.canon.dart';` — that's the whole grammar. Codegen turns this tree into a typed `Screen` facade whose methods *are* its edges. Read this section and you've read the app's navigation; everything below maps to a line in it.
 
 ## The core: typed transitions are legal moves
 
@@ -332,7 +332,7 @@ The payoff: the spec at the top of this file *is* the complete, auditable nav sp
 dependencies:
   canon: ^0.17.0            # runtime
 dev_dependencies:
-  canon_generator: ^0.23.0  # codegen — emits screen.nav.dart
+  canon_generator: ^0.23.0  # codegen — emits screen.canon.dart
   build_runner: any
 ```
 
