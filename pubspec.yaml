@@ -8,7 +8,7 @@ environment:
 
 dependencies:
   canon_codec: ^0.1.3
-  regent: ^0.0.1
+  regent: ^0.1.1
   meta: ^1.18.0
   web: ^1.1.0
 

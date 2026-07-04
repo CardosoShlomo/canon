@@ -1,3 +1,11 @@
+## 0.20.0
+
+- **BREAKING:** pure-Dart core — the Flutter presentation layer moves behind the `NavHost` seam (see `canon_flutter`).
+- canon is the runtime facade: re-exports the `regent` engine (`@stores`, `Store`/`Unit`, guards, `Awaits`, merge edges).
+- `@IDs` id space + `@entities` ownership graph annotations.
+- Generated files are `.canon.dart`; path URL strategy owned by the nav host.
+- `inherit` widens to 16 slots.
+
 ## 0.19.1
 
 - README: `Screen.pop()` returns a sealed `PopDestPlacement` you switch on directly; `Screen.go(Hop)` returns the typed nav.
