@@ -10,7 +10,7 @@ export 'src/screens_annotation.dart';
 // canon is the facade for the runtime model: it re-exports the ledger engine
 // (which carries identifiable) so a consumer imports `canon` and has location,
 // state, and identity in one. `@registries`/`RegistryNode` come from here.
-export 'package:ledger/ledger.dart';
+export 'package:regent/regent.dart';
 
 // Link layer — duplicated from canon_link (intentional; canon_link may later
 // collapse into canon). The DSL (slot/slots/query/fragment/tree/Domain) is
