@@ -102,11 +102,61 @@ final class GrammarNode {
 abstract interface class TreeNode<S> {}
 
 /// A `cycled`/`stacked` back-edge as a first-class set element. Carries the
-/// screen and fold mode; has no methods, so `.cycled.inherit(...)` can't be written.
+/// screen, fold mode, and — when written `x.inherit(y).cycled` — the LOCKED
+/// id inheritance: the folded/stacked placement's id is provably the
+/// ancestor's, with no slot to inject another. Has no methods, so
+/// `.cycled.inherit(...)` can't be written.
 final class _BackEdge<S> extends TreeNode<S> {
-  _BackEdge(this.screen, {required this.collapse});
+  _BackEdge(this.screen,
+      {required this.collapse, this.inheritsFrom, this.inheritsAlso = const []});
   final Enum screen;
   final bool collapse;
+  final Enum? inheritsFrom;
+  final List<Enum> inheritsAlso;
+}
+
+/// The chained form of `.inherit(...)`: carries its placement node DIRECTLY
+/// (never stashed), so chaining is explicit in the type system — one
+/// expression, one node, no orphan to mis-claim. Usable as:
+/// - a bare set element (`editPost.inherit(post)`) — the parent claims it;
+/// - chained call (`user.inherit(chat)({children})`) — the call absorbs it;
+/// - chained back-edge (`user.inherit(chat).cycled`) — id-locked fold/stack;
+/// - chained view-state (`editPost.inherit(post).query({...})`).
+final class Inherited<S> implements TreeNode<S> {
+  Inherited._(this._screen, this._node);
+  final S _screen;
+  final GrammarNode _node;
+
+  /// Declares the inherited placement with [children] as its continuations.
+  S call([Set<TreeNode<S>> children = const {}]) {
+    _placeNode<S>(_node.screen, children, into: _node);
+    return _screen;
+  }
+
+  /// Id-locked fold back-edge: revisiting folds to the same-screen ancestor,
+  /// and the id is provably the inherit source's.
+  _BackEdge<S> get cycled => _BackEdge<S>(_node.screen,
+      collapse: true,
+      inheritsFrom: _node.inheritsFrom,
+      inheritsAlso: _node.inheritsAlso);
+
+  /// Id-locked fresh-instance back-edge.
+  _BackEdge<S> get stacked => _BackEdge<S>(_node.screen,
+      collapse: false,
+      inheritsFrom: _node.inheritsFrom,
+      inheritsAlso: _node.inheritsAlso);
+
+  /// View-state QUERY keys on this inherited placement.
+  Inherited<S> query(Set<QueryTerm> terms) {
+    _node.viewQuery = viewSchema(terms);
+    return this;
+  }
+
+  /// View-state FRAGMENT keys on this inherited placement.
+  Inherited<S> fragment(Set<QueryTerm> terms) {
+    _node.viewFragment = viewSchema(terms);
+    return this;
+  }
 }
 
 /// A node grafted from another screen family, mounted into this family's tree.
@@ -139,8 +189,8 @@ GrammarNode? _takeStash(Enum screen) {
 // and stashes it for its parent (or the graph constructor) to claim. Both
 // node tiers ([LinkNode], [ScreenNodeBase]) author through this.
 void _placeNode<S>(Enum screen, Set<TreeNode<S>> children,
-    {bool keep = false, bool forget = false}) {
-  final node = GrammarNode(screen, keep: keep, forget: forget);
+    {bool keep = false, bool forget = false, GrammarNode? into}) {
+  final node = into ?? GrammarNode(screen, keep: keep, forget: forget);
   for (final child in children) {
     // Link declarations are not nav placements; stash them on the node for the
     // runtime matcher (a LinkBranch = `.link`; a bare LinkTreeNode = widget form).
@@ -148,13 +198,19 @@ void _placeNode<S>(Enum screen, Set<TreeNode<S>> children,
       node.links.add(child);
       continue;
     }
-    // A back-edge carries its own node; a graft claims the foreign node it
-    // named; a bare screen claims its stashed call()/keep() node (tail-first,
-    // so a nested set never steals an outer sibling's) or is a leaf.
+    // A back-edge carries its own node (with any id-lock inheritance); an
+    // inherited placement carries its node directly; a graft claims the
+    // foreign node it named; a bare screen claims its stashed call()/keep()
+    // node (tail-first, so a nested set never steals an outer sibling's) or
+    // is a leaf.
     final GrammarNode childNode;
     if (child is _BackEdge<S>) {
       childNode =
-          GrammarNode(child.screen, again: true, collapse: child.collapse);
+          GrammarNode(child.screen, again: true, collapse: child.collapse)
+            ..inheritsFrom = child.inheritsFrom
+            ..inheritsAlso = child.inheritsAlso;
+    } else if (child is Inherited<S>) {
+      childNode = child._node;
     } else if (child is _Graft<S>) {
       childNode = _takeStash(child.screen) ?? GrammarNode(child.screen);
     } else {
@@ -275,14 +331,18 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   /// contributes one component, matched by node; the kick-start verb shrinks to
   /// only the components no ancestor supplies. Arity mirrors `IdNode.compose`:
   /// a composite id has 2–16 components, so up to 16 sources.
-  S inherit(S s1,
+  Inherited<S> inherit(S s1,
       [S? s2, S? s3, S? s4, S? s5, S? s6, S? s7, S? s8, S? s9, S? s10, S? s11,
       S? s12, S? s13, S? s14, S? s15, S? s16]) {
-    _stash.add(GrammarNode(this)
-      ..inheritsFrom = s1
-      ..inheritsAlso = [?s2, ?s3, ?s4, ?s5, ?s6, ?s7, ?s8, ?s9, ?s10, ?s11,
-          ?s12, ?s13, ?s14, ?s15, ?s16]);
-    return _self;
+    // The node travels INSIDE the wrapper (never stashed): one expression,
+    // one node — a chained call/back-edge/view-state absorbs it explicitly,
+    // and a sibling mention of the same screen can never mis-claim it.
+    return Inherited<S>._(
+        _self,
+        GrammarNode(this)
+          ..inheritsFrom = s1
+          ..inheritsAlso = [?s2, ?s3, ?s4, ?s5, ?s6, ?s7, ?s8, ?s9, ?s10,
+              ?s11, ?s12, ?s13, ?s14, ?s15, ?s16]);
   }
 
   /// Opens link-world for this screen: declares URL branches (`slot`/nested
@@ -345,8 +405,16 @@ final class NavSpec {
               'a back-edge (${trunk.screen}.${trunk.collapse ? 'cycled' : 'stacked'}) '
               'cannot be a trunk');
         }
+        if (trunk is Inherited) {
+          throw StateError('a trunk cannot inherit — it has no ancestor');
+        }
         final screen = trunk is _Graft ? trunk.screen : trunk as Enum;
-        trunks.add(_takeStash(screen) ?? GrammarNode(screen));
+        final node = _takeStash(screen) ?? GrammarNode(screen);
+        if (node.inheritsFrom != null) {
+          throw StateError(
+              'trunk "${screen.name}" cannot inherit — it has no ancestor');
+        }
+        trunks.add(node);
       }
       assert(_stash.isEmpty,
           'unclaimed grammar nodes ${_stash.join(', ')} — structured mentions '

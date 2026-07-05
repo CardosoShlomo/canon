@@ -416,4 +416,65 @@ void main() {
       expect(spec.canonical.length, 2); // settings, language — link skipped
     });
   });
+
+  group('inherit chaining (one expression, one node)', () {
+    test('inherit + call absorbs into a single node — no orphan', () {
+      final s = NavSpec({
+        S.home({S.profile, S.settings.inherit(S.profile)({S.language})}),
+      });
+      final n = s.canonical[S.settings]!;
+      expect(n.inheritsFrom, S.profile);
+      expect(n.children.single.screen, S.language);
+    });
+
+    test('inherit + cycled carries the id lock on the back-edge', () {
+      // The allinloop pair shape: profile.inherit(friends)({friends.inherit(profile).cycled})
+      final s = NavSpec({
+        S.home({
+          S.friends({
+            S.profile.inherit(S.friends)({S.friends.inherit(S.profile).cycled}),
+          }),
+        }),
+      });
+      final profile = s.canonical[S.profile]!;
+      expect(profile.inheritsFrom, S.friends);
+      final edge = profile.children.single;
+      expect(edge.again, isTrue);
+      expect(edge.inheritsFrom, S.profile); // the lock rides the edge
+      expect(edge.resolved.screen, S.friends); // folds to the ancestor
+    });
+
+    test('a sibling back-edge never steals an outer pending inherit', () {
+      // profile.inherit(friends)({ profile.stacked, ... }) — the bare
+      // profile.stacked must not consume the OUTER inherit.
+      final s = NavSpec({
+        S.home({
+          S.friends({
+            S.profile.inherit(S.friends)({
+              S.profile.stacked,
+              S.friends.inherit(S.profile).cycled,
+            }),
+          }),
+        }),
+      });
+      final profile = s.canonical[S.profile]!;
+      expect(profile.inheritsFrom, S.friends); // outer inherit intact
+      final plainEdge =
+          profile.children.firstWhere((n) => n.screen == S.profile);
+      expect(plainEdge.inheritsFrom, isNull); // bare .stacked carries none
+    });
+
+    test('bare inherit as a set element is claimed by its parent', () {
+      final s = NavSpec({
+        S.home({S.settings.inherit(S.home)}),
+      });
+      expect(s.canonical[S.settings]!.inheritsFrom, S.home);
+    });
+
+    test('an inheriting trunk is a build error', () {
+      expect(() => NavSpec({S.settings.inherit(S.home)()}), throwsStateError);
+      expect(() => NavSpec({S.settings.inherit(S.home)}), throwsStateError);
+    });
+  });
+
 }
