@@ -14,11 +14,14 @@ import 'package:meta/meta.dart';
 
 import 'link_dsl.dart';
 
-/// The host-facing face of a screen: its widget. The engine stays Flutter-free —
-/// W is abstract here; the Flutter alias binds it to `Widget`. Lets the host read
-/// a widget off an erased (`Enum`) screen; the name comes from `Enum` directly.
+/// The host-facing face of a screen: its widget — NULLABLE, and never forced:
+/// a row with no widget is a LINK-ONLY row (grammar/URL presence, nothing to
+/// render; nav verbs to it are the generator's concern to omit). The engine
+/// stays Flutter-free — W is abstract here; the Flutter alias binds it to
+/// `Widget`. Lets the host read a widget off an erased (`Enum`) screen; the
+/// name comes from `Enum` directly.
 abstract interface class WidgetScreen<W> {
-  W get widget;
+  W? get widget;
 }
 
 /// One placement of a screen in the grammar tree. A screen may own several
@@ -241,10 +244,12 @@ final class LinkGraph {
 
 mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
     implements TreeNode<S>, WidgetScreen<W> {
-  /// This screen's widget. The public `ScreenNode` alias binds W to `Widget`;
-  /// the engine stays Flutter-free by keeping it an abstract type parameter.
+  /// This screen's widget, or null for a LINK-ONLY row — nothing is forced:
+  /// the base grammar node carries no fields. The public `ScreenNode` alias
+  /// binds W to `Widget`; the engine stays Flutter-free by keeping it an
+  /// abstract type parameter.
   @override
-  W get widget;
+  W? get widget => null;
 
   /// This screen's id codec, or null when id-free. Declared as a field on the
   /// consumer enum (`final Codec? id;`); the engine reads it to round-trip ids
@@ -409,9 +414,10 @@ final class NavSpec {
 
     final owners = <String, Enum>{};
     for (final entry in byName.entries) {
+      // A non-WidgetScreen row (a grafted LinkNode) is widget-less by kind.
       final widgeted = [
         for (final s in entry.value)
-          if ((s as WidgetScreen).widget != null) s
+          if (s is WidgetScreen && (s as WidgetScreen).widget != null) s
       ];
       if (widgeted.length > 1) {
         throw StateError('screen "${entry.key}" has ${widgeted.length} owners '

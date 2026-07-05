@@ -429,7 +429,8 @@ final class NavGraph {
   FloorKind? get rootKind => _floorFace;
 
   /// The current front screen's widget (the top of the live stack), or null while
-  /// booting. A base widget can `return Screen.root.front` to keep showing it.
+  /// booting or on a link-only row. A base widget can `return Screen.root.front`
+  /// to keep showing it.
   Object? get frontWidget {
     final top = _activeScope.slots.lastOrNull?.entry.screen;
     return top == null || top == BootScreen.root
