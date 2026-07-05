@@ -716,13 +716,18 @@ final class NavGraph {
 
   /// Installs the single resolver (last-wins) and replays the pending launch url
   /// once, if one arrived first (the host fed a cold URL before the resolver was
-  /// set). Never disposed — lives the app lifetime.
-  void setResolver(void Function(String url) fn) {
+  /// set). When nothing is pending and the graph is still booting, fires once
+  /// with [boot] instead (the platform launch route) — on mobile no host ever
+  /// feeds a cold URL, and the resolver contract is "always fires at cold
+  /// start". Never disposed — lives the app lifetime.
+  void setResolver(void Function(String url) fn, {String? boot}) {
     _resolver = fn;
     final pending = _pendingUrl;
     if (pending != null) {
       _pendingUrl = null;
       fn(pending);
+    } else if (_booting && boot != null) {
+      fn(boot);
     }
   }
 
