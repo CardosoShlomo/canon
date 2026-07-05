@@ -257,6 +257,7 @@ final class NavGraph {
   NavGraph(
     Set<TreeNode> trunkScreens, {
     this.pageOf,
+    this.chrome,
     Object? root,
     RootScreenBase? seedChain,
     this.observers = _noObservers,
@@ -645,7 +646,16 @@ final class NavGraph {
   /// Builds a page for a screen's widget — the FLUTTER layer's signature
   /// (`Page Function(Widget, PageCtx, Object key)`), stored untyped so the pure
   /// engine never names Flutter types. Null → the flutter host's default page.
+  /// Receives content already ScreenScope-wrapped (chrome included) — pageOf
+  /// is page/route mechanics only, never widget composition.
   final Function? pageOf;
+
+  /// Dresses a screen's widget with the app's per-page chrome (scaffold,
+  /// nav bar, safe areas) — the FLUTTER layer's signature
+  /// (`Widget Function(Widget, PageCtx)`), stored untyped like [pageOf].
+  /// The host wraps the ScreenScope AROUND the chrome, so chrome reads
+  /// `context.screen` like any screen content. Null → no chrome.
+  final Function? chrome;
 
   /// Navigator observers factory — opaque here; the flutter host reads it.
   final List<Object> Function() observers;
