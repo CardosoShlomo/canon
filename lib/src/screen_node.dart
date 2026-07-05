@@ -452,6 +452,23 @@ final class NavSpec {
         forgets.add(node.screen);
         live = false;
       }
+      // A LINK-ONLY row (no widget by kind) cannot sit ABOVE presenting rows
+      // yet: navigation would have to pass through an unrenderable stack
+      // entry. Fail at build until pass-through (stack-skipped URL segment)
+      // placement lands.
+      final s = node.screen;
+      final linkOnly = s is! WidgetScreen || (s as WidgetScreen).widget == null;
+      if (linkOnly) {
+        for (final child in node.children) {
+          final c = child.screen;
+          if (c is WidgetScreen && (c as WidgetScreen).widget != null) {
+            throw StateError(
+                'link-only row "${s.name}" has presenting child '
+                '"${c.name}" — navigating through a link-only row is not '
+                'supported yet');
+          }
+        }
+      }
       for (final child in node.children) {
         check(child, trunk, live);
       }

@@ -29,4 +29,21 @@ void main() {
   test('id defaults null — nothing to declare on a pure link row', () {
     expect(_Links.product.id, isNull);
   });
+
+  test('a presenting row under a link-only row fails at build (for now)', () {
+    expect(
+        () => NavGraph({
+              _Links.shop({graft(_Shop.storefront())}),
+            }),
+        throwsStateError);
+  });
 }
+
+// A screen family, for the mixed-kind guard.
+enum _Shop with ScreenNodeBase<_Shop, Object> {
+  storefront;
+
+  @override
+  Object get widget => name;
+}
+
