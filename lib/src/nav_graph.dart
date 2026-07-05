@@ -1335,10 +1335,13 @@ final class NavGraph {
     // commit, no history entry, no rebuild (so re-tapping the active tab does
     // nothing). Checked before consuming any replace flag so a chain's later
     // segment still sees it. Boot is excluded — the first commit must run.
+    // A declared STACKED self-edge overrides: `user.stacked` means a fresh
+    // instance is legitimate even at the same (screen, id).
     if (sim.active != BootScreen.root &&
         sim.stack.isNotEmpty &&
         sim.stack.last.screen == screen &&
-        sim.stack.last.id == id) {
+        sim.stack.last.id == id &&
+        !spec.edgeStacks(sim.stack.last.node, screen)) {
       return _nav;
     }
     _consumeReplace(sim);

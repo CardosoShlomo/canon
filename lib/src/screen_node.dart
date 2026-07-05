@@ -602,6 +602,15 @@ final class NavSpec {
     return true;
   }
 
+  /// Whether [top]→[target] is a STACKED back-edge (`.stacked`): a declared
+  /// fresh-instance push, legitimate even onto the same (screen, id).
+  bool edgeStacks(GrammarNode top, Enum target) {
+    for (final child in top.resolved.children) {
+      if (child.screen == target) return child.again && !child.collapse;
+    }
+    return false;
+  }
+
   /// Order-independent canonical encoding of the tree's shape (names, nesting,
   /// keep/forget/again flags). The generator emits the same encoding from
   /// source; a mismatch means the tree was re-parented without regenerating.

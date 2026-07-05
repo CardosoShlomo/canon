@@ -1,3 +1,4 @@
+import 'package:canon/src/nav_graph.dart';
 import 'package:canon/src/screen_node.dart';
 import 'package:test/test.dart';
 
@@ -477,4 +478,33 @@ void main() {
     });
   });
 
+
+  group('stacked self-edge vs the same-id no-op guard', () {
+    test('same (screen,id) PUSHES through a declared stacked self-edge',
+        () async {
+      final g = NavGraph({
+        S.home({
+          S.profile({S.profile.stacked}),
+        }),
+      });
+      g.go(S.home);
+      g.go(S.profile);
+      g.go(S.profile); // same screen, same (null) id — stacked edge declared
+      await Future.microtask(() {}); // commits are microtask-deferred
+      expect(g.stack.map((e) => e.screen),
+          [S.home, S.profile, S.profile]);
+    });
+
+    test('without a stacked self-edge the same-id go stays a no-op',
+        () async {
+      final g = NavGraph({
+        S.home({S.settings()}),
+      });
+      g.go(S.home);
+      g.go(S.settings);
+      g.go(S.settings); // re-tap: idempotent
+      await Future.microtask(() {});
+      expect(g.stack.map((e) => e.screen), [S.home, S.settings]);
+    });
+  });
 }
