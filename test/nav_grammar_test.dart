@@ -61,7 +61,7 @@ enum TwoOwners with ScreenNodeBase<TwoOwners, Object?> {
 }
 
 enum Dangling with ScreenNodeBase<Dangling, Object?> {
-  ghost; // a ref (null widget) with no owner anywhere
+  ghost; // widget-less everywhere: a LINK-ONLY row by kind
 
   @override
   Object? get widget => null;
@@ -182,8 +182,10 @@ void main() {
           throwsStateError);
     });
 
-    test('a ref with no owner is a build error', () {
-      expect(() => NavSpec({Dangling.ghost()}), throwsStateError);
+    test('a widget-less name group is a legal LINK-ONLY row, not an orphan',
+        () {
+      final spec = NavSpec({Dangling.ghost()});
+      expect(spec.trunks.single.screen, Dangling.ghost);
     });
   });
 

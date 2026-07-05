@@ -8,7 +8,9 @@ enum _Links with LinkNode<_Links> {
   product,
   review;
 
-  static final graph = LinkGraph({
+  // ONE graph type for every tree — a spec-only NavGraph (no root, no
+  // host): the graph knows link-only rows by their kind.
+  static final graph = NavGraph({
     shop({
       product({review}),
     }),
@@ -17,7 +19,7 @@ enum _Links with LinkNode<_Links> {
 
 void main() {
   test('a fieldless enum authors a links-only tree', () {
-    final trunks = _Links.graph.trunks;
+    final trunks = _Links.graph.spec.trunks;
     expect(trunks, hasLength(1));
     expect(trunks.first.screen, _Links.shop);
     expect(trunks.first.children.single.screen, _Links.product);

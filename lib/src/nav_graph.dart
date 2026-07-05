@@ -260,18 +260,22 @@ final class NavGraph {
     Object? root,
     RootScreenBase? seedChain,
     this.observers = _noObservers,
-  })  : assert((root == null) != (seedChain == null),
-            'pass exactly one of `root:` (the boot widget) or `seedChain:`'),
+  })  : assert(!(root != null && seedChain != null),
+            'pass at most one of `root:` (the boot widget) or `seedChain:` — '
+            'neither for a spec-only graph (links-only, servers, tests)'),
         spec = NavSpec(trunkScreens) {
     _linkRoot = _linkRootOf(trunkScreens, spec);
     _collectViewSchema();
     _bootWidget = root;
-    final chain = root != null
-        ? const <(Enum, Object?)>[(BootScreen.root, null)]
-        : seedChain!.chain;
+    // Neither root nor seedChain = a SPEC-ONLY graph: the grammar, links, and
+    // URL surface with no boot stack — what a links-only tree (all LinkNode
+    // rows) or a headless consumer authors.
+    final chain = seedChain != null
+        ? seedChain.chain
+        : const <(Enum, Object?)>[(BootScreen.root, null)];
     _activeTrunk = chain.first.$1;
     final scope = NavScope();
-    var node = root != null ? _bootNode : spec.canonical[_activeTrunk]!;
+    var node = seedChain == null ? _bootNode : spec.canonical[_activeTrunk]!;
     Enum? from;
     for (var i = 0; i < chain.length; i++) {
       final (screen, id) = chain[i];

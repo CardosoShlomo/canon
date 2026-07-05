@@ -220,28 +220,6 @@ void _attachViewTo(Enum screen, void Function(GrammarNode) apply) {
   }
 }
 
-/// The validated links-only tree: claims the authored placements exactly the
-/// way [NavSpec] does, without nav semantics (no liveness, no back-edges).
-/// The structure surface for the matcher/generator passes to come.
-final class LinkGraph {
-  LinkGraph(Set<TreeNode> tree) {
-    try {
-      for (final trunk in tree) {
-        if (trunk is LinkBranch) continue;
-        final screen = trunk as Enum;
-        trunks.add(_takeStash(screen) ?? GrammarNode(screen));
-      }
-      assert(_stash.isEmpty,
-          'unclaimed grammar nodes ${_stash.join(', ')} — structured mentions '
-          'that are not elements of their enclosing set');
-    } finally {
-      _stash.clear();
-    }
-  }
-
-  final List<GrammarNode> trunks = [];
-}
-
 mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
     implements TreeNode<S>, WidgetScreen<W> {
   /// This screen's widget, or null for a LINK-ONLY row — nothing is forced:
@@ -423,11 +401,9 @@ final class NavSpec {
         throw StateError('screen "${entry.key}" has ${widgeted.length} owners '
             '(${widgeted.join(', ')}) — only one declaration may carry a widget');
       }
-      if (widgeted.isEmpty) {
-        throw StateError('screen "${entry.key}" is a ref with no owner — '
-            'one same-named declaration must carry the widget');
-      }
-      owners[entry.key] = widgeted.first;
+      // No widget in the whole name group = a LINK-ONLY row (URL presence,
+      // nothing to render) — legal by kind; the first declaration owns it.
+      owners[entry.key] = widgeted.isEmpty ? entry.value.first : widgeted.first;
     }
 
     void rewrite(GrammarNode node) {
