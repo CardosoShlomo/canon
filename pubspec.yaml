@@ -1,6 +1,6 @@
 name: canon
 description: "Application runtime context from a single grammar tree: navigation, identity, and state as one compile-safe spec."
-version: 0.20.0
+version: 0.21.0
 repository: https://github.com/CardosoShlomo/canon
 
 environment:
@@ -8,7 +8,7 @@ environment:
 
 dependencies:
   canon_codec: ^0.1.3
-  regent: ^0.1.1
+  regent: ^0.2.0
   meta: ^1.18.0
   web: ^1.1.0
 

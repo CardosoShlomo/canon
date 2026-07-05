@@ -1,3 +1,12 @@
+## 0.21.0
+
+- `LinkNode`: the fieldless links-only grammar tier; one graph — spec-only `NavGraph` (no root/seedChain).
+- `widget` optional on screen nodes: widget-less rows are link-only.
+- `inherit` chains through a typed `Inherited` wrapper; back-edges carry the id lock.
+- A declared `.stacked` self-edge overrides the same-id no-op guard.
+- `chrome` hook: the host wraps `ScreenScope` around consumer page chrome.
+- `setResolver` boot fallback — the resolver always fires at cold start.
+
 ## 0.20.0
 
 - **BREAKING:** pure-Dart core — the Flutter presentation layer moves behind the `NavHost` seam (see `canon_flutter`).
