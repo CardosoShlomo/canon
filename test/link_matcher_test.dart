@@ -9,14 +9,14 @@ enum Sort { asc, desc }
 final spec = LinkSpec([
   DomainNode(
     'https://example.com',
-    LinkNode(statics: [
+    PathNode(statics: [
       StaticEdge(
         'author',
-        LinkNode(
-          statics: [StaticEdge('me', LinkNode(name: 'userMe', endpoint: true))],
+        PathNode(
+          statics: [StaticEdge('me', PathNode(name: 'userMe', endpoint: true))],
           slot: SlotEdge(
             [Codec.uuid, Codec.string],
-            LinkNode(
+            PathNode(
               name: 'author',
               query: ParamSchema(
                   [KeyDef('loop', mandatory: false)]), // codec null => flag
@@ -26,7 +26,7 @@ final spec = LinkSpec([
       ),
       StaticEdge(
         'search',
-        LinkNode(name: 'search', query: ParamSchema([
+        PathNode(name: 'search', query: ParamSchema([
           KeyDef('q', codec: Codec.string),
           KeyDef('sort', codec: Codec.enumValues(Sort.values), mandatory: false),
           KeyDef('tag', codec: Codec.string, list: true),

@@ -32,7 +32,7 @@ String _kebab(String s) =>
 
 List<Term> _terms(Set<QueryTerm> set) => [for (final t in set) t._buildTerm()];
 
-LinkNode _assemble({
+PathNode _assemble({
   String? name,
   required Set<LinkTreeNode?> children,
   required List<Term> ownQuery,
@@ -62,7 +62,7 @@ LinkNode _assemble({
     }
   }
   final query = [...ownQuery, ...shared, ...sharedQuery];
-  return LinkNode(
+  return PathNode(
     name: name,
     statics: statics,
     slot: slot,
@@ -106,7 +106,7 @@ mixin _Chain implements LinkTreeNode {
   List<Term> _ownFragment = const [];
   List<Term> _sharedQuery = const [];
 
-  LinkNode _node(String? name, List<Term> shared) => _assemble(
+  PathNode _node(String? name, List<Term> shared) => _assemble(
         name: name,
         children: children,
         ownQuery: _ownQuery,
@@ -284,11 +284,11 @@ LinkSpec tree(Set<DomainPlacement> domains) => LinkSpec([
         ),
     ]);
 
-/// Builds a root [LinkNode] from the `.links` branches gathered off the
+/// Builds a root [PathNode] from the `.links` branches gathered off the
 /// `@screens` graph (each a screen-rooted `SegBuilder`) — the runtime link tree
 /// the matcher walks. Domain-agnostic: the caller wraps it in a [DomainNode]
 /// built from the URL's own origin at parse time.
-LinkNode linkRoot(Set<LinkTreeNode?> branches) => _assemble(
+PathNode linkRoot(Set<LinkTreeNode?> branches) => _assemble(
       children: branches,
       ownQuery: const [],
       ownFragment: const [],

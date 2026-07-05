@@ -26,7 +26,7 @@ final class LinkMatch {
 
   final DomainNode _domain;
   final List<_Hit> _hits;
-  final LinkNode node;
+  final PathNode node;
   final List<Object?> path;
 
   /// Per slot value (in [path] order), the index of the codec that matched —
@@ -129,7 +129,7 @@ final class LinkMatcher {
     return LinkMatch._(domain, hits, node, path, branches, query, fragment);
   }
 
-  StaticEdge? _firstStatic(LinkNode node, String token) {
+  StaticEdge? _firstStatic(PathNode node, String token) {
     for (final e in node.statics) {
       if (e.literal == token) return e;
     }

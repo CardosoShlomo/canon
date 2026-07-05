@@ -523,7 +523,7 @@ final class NavGraph {
   /// tree (trunk-level and nested, path-prefixed by their nav ancestors), or null
   /// if the tree declares no links. The matcher walks it; host-agnostic (origin
   /// is supplied per parse).
-  late final LinkNode? _linkRoot;
+  late final PathNode? _linkRoot;
 
   // Wrap [inner] in a chain of static segs for [ancestors] (outermost first), so
   // a nested link carries its placement path (`profile` > `user` > slot).
@@ -535,7 +535,7 @@ final class NavGraph {
     return node;
   }
 
-  static LinkNode? _linkRootOf(Set<TreeNode> trunkScreens, NavSpec spec) {
+  static PathNode? _linkRootOf(Set<TreeNode> trunkScreens, NavSpec spec) {
     final branches = <LinkTreeNode>{};
     // Root-level links sit directly in the tree set (no enclosing placement).
     for (final r in trunkScreens) {

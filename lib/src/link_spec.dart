@@ -52,7 +52,7 @@ final class ParamSchema {
 /// A path edge: a static literal, or a slot trying [codecs] in precedence order.
 sealed class Edge {
   const Edge(this.child);
-  final LinkNode child;
+  final PathNode child;
 }
 
 final class StaticEdge extends Edge {
@@ -68,8 +68,8 @@ final class SlotEdge extends Edge {
 /// One path position. Statics are tried before the (at most one) slot.
 /// A node resolves (is an endpoint) when [endpoint] is set, when it has a query
 /// or fragment schema (params imply resolution), or when it is a leaf.
-final class LinkNode {
-  LinkNode({
+final class PathNode {
+  PathNode({
     this.name,
     this.statics = const [],
     this.slot,
@@ -98,7 +98,7 @@ final class DomainNode {
   DomainNode(this.prefix, this.root) : _uri = Uri.parse(prefix);
 
   final String prefix;
-  final LinkNode root;
+  final PathNode root;
   final Uri _uri;
 
   String get scheme => _uri.scheme.toLowerCase();

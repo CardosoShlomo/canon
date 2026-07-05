@@ -132,6 +132,113 @@ GrammarNode? _takeStash(Enum screen) {
   return null;
 }
 
+// The shared placement builder: assembles a GrammarNode from a children set
+// and stashes it for its parent (or the graph constructor) to claim. Both
+// node tiers ([LinkNode], [ScreenNodeBase]) author through this.
+void _placeNode<S>(Enum screen, Set<TreeNode<S>> children,
+    {bool keep = false, bool forget = false}) {
+  final node = GrammarNode(screen, keep: keep, forget: forget);
+  for (final child in children) {
+    // Link declarations are not nav placements; stash them on the node for the
+    // runtime matcher (a LinkBranch = `.link`; a bare LinkTreeNode = widget form).
+    if (child is LinkBranch || child is LinkTreeNode) {
+      node.links.add(child);
+      continue;
+    }
+    // A back-edge carries its own node; a graft claims the foreign node it
+    // named; a bare screen claims its stashed call()/keep() node (tail-first,
+    // so a nested set never steals an outer sibling's) or is a leaf.
+    final GrammarNode childNode;
+    if (child is _BackEdge<S>) {
+      childNode =
+          GrammarNode(child.screen, again: true, collapse: child.collapse);
+    } else if (child is _Graft<S>) {
+      childNode = _takeStash(child.screen) ?? GrammarNode(child.screen);
+    } else {
+      final s = child as Enum;
+      childNode = _takeStash(s) ?? GrammarNode(s);
+    }
+    childNode.parent = node;
+    node.children.add(childNode);
+  }
+  _stash.add(node);
+}
+
+/// A URL-addressable grammar node with NO presentation and NO fields — the
+/// enum NAME is the whole declaration. The links-only tier of the screens
+/// grammar: a server or API surface authors
+/// `enum _Links with LinkNode<_Links>` and builds the same tree
+/// (`user({product})`) with the same link/view-state vocabulary, and nothing
+/// to render. A [ScreenNodeBase] row is conceptually a LinkNode plus a
+/// widget; the hierarchy unification (placement-as-link, matcher/generator
+/// support) is a coming pass — today this is the authoring surface and the
+/// validated tree ([LinkGraph]).
+mixin LinkNode<S extends LinkNode<S>> on Enum implements TreeNode<S> {
+  /// This node's id codec, or null when id-free — an overridable GETTER, so
+  /// a links-only enum stays completely field-free.
+  Codec<Object?>? get id => null;
+
+  S get _self => this as S;
+
+  /// Declares a placement of this node with [children] as its continuations.
+  S call([Set<TreeNode<S>> children = const {}]) {
+    _placeNode<S>(this, children);
+    return _self;
+  }
+
+  /// URL ingress branches (`slot`/nested segs) that resolve to this node.
+  LinkBranch<S> links([Set<LinkTreeNode?> children = const {}]) =>
+      LinkBranch<S>(SegBuilder.forScreen(name)..children = children);
+
+  /// Singular alias of [links].
+  LinkBranch<S> link([Set<LinkTreeNode?> children = const {}]) =>
+      links(children);
+
+  /// This placement's `?query` view-state keys — URL-tier, so it lives on
+  /// the link tier (a server route's query params are the same declaration).
+  S query(Set<QueryTerm> terms) {
+    _attachViewTo(this, (n) => n.viewQuery = viewSchema(terms));
+    return _self;
+  }
+
+  /// Like [query] for the URL `#fragment`.
+  S fragment(Set<QueryTerm> terms) {
+    _attachViewTo(this, (n) => n.viewFragment = viewSchema(terms));
+    return _self;
+  }
+}
+
+void _attachViewTo(Enum screen, void Function(GrammarNode) apply) {
+  for (var i = _stash.length - 1; i >= 0; i--) {
+    if (_stash[i].screen == screen && !_stash[i].again) {
+      apply(_stash[i]);
+      return;
+    }
+  }
+}
+
+/// The validated links-only tree: claims the authored placements exactly the
+/// way [NavSpec] does, without nav semantics (no liveness, no back-edges).
+/// The structure surface for the matcher/generator passes to come.
+final class LinkGraph {
+  LinkGraph(Set<TreeNode> tree) {
+    try {
+      for (final trunk in tree) {
+        if (trunk is LinkBranch) continue;
+        final screen = trunk as Enum;
+        trunks.add(_takeStash(screen) ?? GrammarNode(screen));
+      }
+      assert(_stash.isEmpty,
+          'unclaimed grammar nodes ${_stash.join(', ')} — structured mentions '
+          'that are not elements of their enclosing set');
+    } finally {
+      _stash.clear();
+    }
+  }
+
+  final List<GrammarNode> trunks = [];
+}
+
 mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
     implements TreeNode<S>, WidgetScreen<W> {
   /// This screen's widget. The public `ScreenNode` alias binds W to `Widget`;
@@ -161,31 +268,7 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
       _place(children, forget: true);
 
   S _place(Set<TreeNode<S>> children, {bool keep = false, bool forget = false}) {
-    final node = GrammarNode(this, keep: keep, forget: forget);
-    for (final child in children) {
-      // Link declarations are not nav placements; stash them on the node for the
-      // runtime matcher (a LinkBranch = `.link`; a bare LinkTreeNode = widget form).
-      if (child is LinkBranch || child is LinkTreeNode) {
-        node.links.add(child);
-        continue;
-      }
-      // A back-edge carries its own node; a graft claims the foreign node it
-      // named; a bare screen claims its stashed call()/keep() node (tail-first,
-      // so a nested set never steals an outer sibling's) or is a leaf.
-      final GrammarNode childNode;
-      if (child is _BackEdge<S>) {
-        childNode =
-            GrammarNode(child.screen, again: true, collapse: child.collapse);
-      } else if (child is _Graft<S>) {
-        childNode = _takeStash(child.screen) ?? GrammarNode(child.screen);
-      } else {
-        final s = child as Enum;
-        childNode = _takeStash(s) ?? GrammarNode(s);
-      }
-      childNode.parent = node;
-      node.children.add(childNode);
-    }
-    _stash.add(node);
+    _placeNode<S>(this, children, keep: keep, forget: forget);
     return _self;
   }
 
