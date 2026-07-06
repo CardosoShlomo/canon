@@ -1,3 +1,7 @@
+## 0.22.0
+
+- The regent 0.4 citizens surface, re-exported.
+
 ## 0.21.1
 
 - Allow regent 0.3.
