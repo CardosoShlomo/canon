@@ -2,7 +2,7 @@
 
 **An application runtime context specification.** You declare your app's navigable runtime contexts as one grammar tree; canon projects that spec into navigation, the URL, and state. Everything else hangs off that essence as a property: *compile-safety* is how the projection is realized, and *identity*, when a context has one, is a property **of the context** — ambient within it, read from the runtime, never threaded through application code.
 
-Compile-safe Flutter navigation generated from **one grammar tree**. The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash.
+Compile-safe navigation generated from **one grammar tree** — pure Dart (the Flutter binding is `canon_flutter`). The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash.
 
 Built for the AI-authorship era: a machine can only emit legal navigation, and a human audits the **entire nav space** at a glance in one small spec.
 
