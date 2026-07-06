@@ -326,14 +326,35 @@ The bottom of the history — the **root** — has three faces the consumer pick
 
 The payoff: the spec at the top of this file *is* the complete, auditable nav space. A model can only emit legal navigation, and a human reviews every reachable route at a glance.
 
+## The state side
+
+Navigation is one projection of the spec; **state is the other** — canon
+re-exports [regent](https://pub.dev/packages/regent), the optimistic
+message-driven engine, so pure-Dart consumers get the whole surface from
+this one package. Two more small enums complete the picture:
+
+- `@entities` — what exists: each row binds an entity TYPE to its id node;
+  the graph declares ownership.
+- `@regents` — the LEDGER's citizens in traversal order: stores fold what
+  passes, guard/veto rows judge what every row below sees (pass, drop,
+  rewrite), and merge edges (`products.from(localProducts, …)`) let one
+  store answer another's reads — the disk-cache shadow pattern. Optimism is
+  declared, not wired: a store's `Verdict` settles predictions by state
+  comparison (instant fold, echo confirms, silence reverts).
+
+The same id node keys a screen and a store, so data injects by nav location.
+See `canon_flutter` for the reactive reads (`store(id).of(context)`) and the
+generator's example for both a compact todo welcome and the full ecommerce
+showcase.
+
 ## Install
 
 ```yaml
 dependencies:
-  canon: ^0.17.0            # runtime
+  canon: ^0.22.0            # runtime — nav grammar + the regent state engine
 dev_dependencies:
-  canon_generator: ^0.23.0  # codegen — emits screen.canon.dart
+  canon_generator: ^0.29.0  # codegen — emits screen.canon.dart
   build_runner: any
 ```
 
-`dart run build_runner build` generates the typed `Screen` facade — typed nav, URL mirror, `.link` ingress + `.toUri()` link builders, and view-state, all from the one grammar.
+`dart run build_runner build` generates the typed `Screen` facade — typed nav, URL mirror, `.link` ingress + `.toUri()` link builders, view-state, and the ledger wiring (memories, guards, merges, the `Stores` facade), all from the one grammar.
