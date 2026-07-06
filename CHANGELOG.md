@@ -1,3 +1,7 @@
+## 0.21.1
+
+- Allow regent 0.3.
+
 ## 0.21.0
 
 - `LinkNode`: the fieldless links-only grammar tier; one graph — spec-only `NavGraph` (no root/seedChain).
