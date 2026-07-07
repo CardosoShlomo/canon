@@ -2,7 +2,7 @@
 
 **An application runtime context specification.** You declare your app's navigable runtime contexts as one grammar tree; canon projects that spec into navigation, the URL, and state. Everything else hangs off that essence as a property: *compile-safety* is how the projection is realized, and *identity*, when a context has one, is a property **of the context** — ambient within it, read from the runtime, never threaded through application code.
 
-Compile-safe navigation generated from **one grammar tree** — pure Dart (the Flutter binding is `canon_flutter`). The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash.
+Compile-safe navigation generated from **one grammar tree** — pure Dart (the Flutter binding is `canon_flutter`). The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash. Four small enums are the entire spec: `@IDs` (identity), `@screens` (navigation), `@entities` (what exists), `@regents` (the state ledger's citizens).
 
 Built for the AI-authorship era: a machine can only emit legal navigation, and a human audits the **entire nav space** at a glance in one small spec.
 
@@ -320,32 +320,169 @@ The bottom of the history — the **root** — has three faces the consumer pick
 ## Guarantees
 
 - **Compile-time:** illegal targets, missing/mistyped ids, and back-at-trunk aren't expressible — the methods don't exist or don't type-check.
-- **Build-time validation:** one owner per screen name; every declaration of a name agrees on id type; `inherit` must target a real ancestor with a matching id type; `keep`/`forget` must genuinely flip retention; a name is a screen *or* a `.link` branch at a given position, never both; redundant forms are rejected — a bare leaf (`X`, not `X()`), and no empty `slots({})` (a screen is already linkable by its id).
+- **Build-time validation:** one owner per screen name; every declaration of a name agrees on id type; `inherit` must target a real ancestor with a matching id type; `keep`/`forget` must genuinely flip retention; a name is a screen *or* a `.link` branch at a given position, never both; redundant forms are rejected — a bare leaf (`X`, not `X()`), and no empty `slots({})` (a screen is already linkable by its id). On the state side: stores attach to aggregate roots only; a store's key type must agree with its entity's node; a reduce's message family must be `sealed` (or the root `Msg`, for shadows); merge edges connect STORE rows only, targets keyed.
 - **Runtime:** a placement's verbs are edge-required — they throw on a stale-invalid edge rather than silently teleporting. The engine's raw `go`/`pop` are `@internal`; the typed verbs are the only navigation surface.
 - **Drift check:** `assert(Screen.isCodegenFresh)` in a test fails if codegen and the live tree diverge.
 
 The payoff: the spec at the top of this file *is* the complete, auditable nav space. A model can only emit legal navigation, and a human reviews every reachable route at a glance.
 
-## The state side
+## The identity space: `@IDs`
 
-Navigation is one projection of the spec; **state is the other** — canon
-re-exports [regent](https://pub.dev/packages/regent), the optimistic
-message-driven engine, so pure-Dart consumers get the whole surface from
-this one package. Two more small enums complete the picture:
+Ids graduate from codec arguments to a **declared space**: one enum, each row
+a node carrying its URL codec. Codegen emits a zero-cost extension type per
+node (`TodoId` over `String` — erased at runtime, nominal at compile time),
+and the SAME node keys a screen and a store, which is what lets data inject
+by nav location:
 
-- `@entities` — what exists: each row binds an entity TYPE to its id node;
-  the graph declares ownership.
-- `@regents` — the LEDGER's citizens in traversal order: stores fold what
-  passes, guard/veto rows judge what every row below sees (pass, drop,
-  rewrite), and merge edges (`products.from(localProducts, …)`) let one
-  store answer another's reads — the disk-cache shadow pattern. Optimism is
-  declared, not wired: a store's `Verdict` settles predictions by state
-  comparison (instant fold, echo confirms, silence reverts).
+```dart
+@IDs()
+enum Ids with IdNode {
+  todo(.uuid);
 
-The same id node keys a screen and a store, so data injects by nav location.
-See `canon_flutter` for the reactive reads (`store(id).of(context)`) and the
-generator's example for both a compact todo welcome and the full ecommerce
-showcase.
+  const Ids(this.codec);
+  @override
+  final Codec codec;
+}
+```
+
+`todosStore[someUserId]` stops compiling; `Screen.goTodo(id)` takes a
+`TodoId`. Composite identities compose rows —
+`todoComment.compose(todo, comment)` emits a nominal record type with named
+components (`TodoCommentId.of(todo, comment)`, `.todo` / `.comment`
+getters). Typing is **gradual**: stores may key by the raw codec type
+(`String`) before the first generation exists and tighten to `TodoId`
+whenever — the two are runtime-identical.
+
+## The entity space: `@entities`
+
+What exists, and who owns whom. Each row binds an entity TYPE to its id
+node; a row **without** a node is a UNIT — cardinality one, the session is
+its identity (the wire test: its facts arrive keyless). The static graph
+declares OWNERSHIP — a child's state lives inside its root's store, and
+codegen derives surgical tree ops from it:
+
+```dart
+@entities
+enum _Entities with EntityNode<_Entities> {
+  todo(Todo, .todo),
+  coverage(bool);          // keyless — a unit entity
+
+  const _Entities(this.type, [this.key]);
+  @override
+  final Type type;
+  @override
+  final Ids? key;
+
+  static final graph = EntityGraph({todo, coverage});
+}
+```
+
+The rules are build-time checked: a store may attach to aggregate ROOTS
+only (a store on an owned child fails the build — its state lives in the
+root's store); the store's key type must agree with its entity's node; the
+entity a store holds must be a row here. Nothing is declared twice, so the
+trees can never disagree.
+
+## The ledger: `@regents`
+
+State is a **journal of sealed facts** folded by pure functions —
+`dispatch(fact)` is the app's only verb. The `@regents` enum declares the
+ledger's CITIZENS, and **row order is traversal order**: a message walks
+the rows top to bottom. One order, two opposite roles:
+
+- A **store** row is a pure READER standing at its place: it folds what
+  passes (`Store.reduce` over a keyed collection, `Unit.reduce` over one
+  value) and can never touch the message. What it sees is whatever survived
+  the guards above its row.
+- A **guard** row is a pure JUDGE of the flow: it folds nothing and holds
+  no state, but decides what every row below it sees — pass, drop, or
+  rewrite (`Guard.judge`); a `Veto` is the boolean specialization. Guards
+  read the world only through the generated read-only `Stores` facade, so
+  they are replayable by construction — and they expose NOTHING consumable
+  (no state, no stream): observation is stores-only, by design.
+
+Moving a store changes what IT sees; moving a guard changes what EVERYONE
+below it sees. The journal always keeps the original fact — guards shape
+the admitted feed, never the record; `ledger.on<M>()` taps the END of the
+queue, so effects never fire on a dropped message.
+
+```dart
+@regents
+enum _Regents with RegentNode<_Regents> {
+  todosCovered(TodosCovered()),       // coverage folds first
+  cachedTodosGate(CachedTodosGate()), // the veto — protects every row below
+  localTodos(LocalTodos()),           // the disk-cache shadow
+  todos(Todos());                     // the main store
+
+  const _Regents(this.regent);
+  @override
+  final Regent regent;
+
+  static final merges = {
+    todos.from(localTodos, const LocalTodoSupports()),
+  };
+}
+
+final class CachedTodosGate extends Veto<CachedTodosMsg, Stores> {
+  const CachedTodosGate();
+  @override
+  bool block(Envelope env, CachedTodosMsg msg, Stores stores) =>
+      stores.todosCovered.value;
+}
+```
+
+**Merges** are read-time edges, never copied state: the enum's static
+`merges` set declares that one store READS-FROM another through a
+projection (`row ?? local`). Store rows only, both ends — build-checked; a
+unit source answers at its state's own id (the viewer answering reads of
+herself), a store source lends its whole collection. Chain `.from(...)` for
+multiple sources; resolution follows declaration order.
+
+**The four rows above are the offline pattern, whole**: a boot-time cache
+fact folds into the SHADOW (absent-only), the merge lets the shadow answer
+the main store's reads instantly, the coverage unit records when the live
+authority has spoken, and the gate drops late cache facts from that moment
+on. Cold start renders from disk; truth wins the instant it arrives.
+
+**Optimism is declared, not wired.** A store's `Verdict` names a PREDICTION
+family and a RESOLVER family: a prediction folds instantly as a pending
+overlay (base state is never touched, so rollback can't clobber a confirmed
+write), the resolver settles it by STATE COMPARISON — re-applying the
+prediction as a no-op confirms; silence past the deadline reverts; a
+partial apply lands `amended`. No wire correlation ids. The wire request
+itself can BE the prediction — one dispatch sends and folds:
+
+```dart
+final class CompleteVerdict extends Verdict<CompleteTodo, TodoToggled> {
+  const CompleteVerdict();
+}
+
+final class Todos extends Store<TodoId, Todo, TodoMsg> {
+  const Todos() : super(verdict: const CompleteVerdict());
+  // reduce: CompleteTodo and TodoToggled fold the same absolute fact
+}
+```
+
+One discipline this buys into: **facts are absolute** —
+`CompleteTodo(done: true)`, never `ToggleTodo` — because only an absolute
+fact re-applies as a no-op. Every entry carries `Flags`
+(`pending / confirmed / reverted / amended / stale / failed` + `tampered`),
+so the UI can tell a hope from a truth.
+
+**Message conventions** (the rules the engine can't enforce): messages are
+facts, not calls (`TodoAdded`, never `AddTodo`-the-handler); semantic
+outcomes, never generic errors (`UsernameTaken`, not `Error(...)`); one
+sealed family per entity concern, so a new variant is a compile error until
+every store answers it (a SHADOW may reduce the root `Msg` and delegate).
+
+Codegen wires all of it from the enum — the memories bound in row order,
+the guards with their facade, the merge edges, the `Stores` facade itself —
+and `Screen.manager` binds the ledger on first use. Reads in Flutter are
+reactive and surgical via `canon_flutter`: `todosStore.of(context)` (the
+key sequence — structural rebuilds only), `todosStore(id).of(context)` (one
+entity), `unitStore.of(context)`; request status is DERIVED via a store's
+`Awaits` twin (`loadingOf(context)`, `inFlight`) — no `loading` fields in
+state, ever.
 
 ## Install
 
