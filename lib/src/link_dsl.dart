@@ -44,7 +44,7 @@ PathNode _assemble({
   // cascade — a fragment is terminal (one `#…` per URL), so it's own-node only.
   final childShared = [...shared, ...sharedQuery];
   final statics = <StaticEdge>[];
-  SlotEdge? slot;
+  final slots = <SlotEdge>[];
   var endpoint = false;
   for (final child in children) {
     if (child == null) {
@@ -55,17 +55,25 @@ PathNode _assemble({
     if (edge is StaticEdge) {
       statics.add(edge);
     } else {
-      if (slot != null) {
-        throw StateError('a children set may hold at most one slot');
-      }
-      slot = edge as SlotEdge;
+      slots.add(edge as SlotEdge);
+    }
+  }
+  // Suffixed slots match before the bare one; at most one of each shape.
+  slots.sort((a, b) => (a.suffix == null ? 1 : 0) - (b.suffix == null ? 1 : 0));
+  final seen = <String?>{};
+  for (final s in slots) {
+    if (!seen.add(s.suffix)) {
+      throw StateError(s.suffix == null
+          ? 'a children set may hold at most one bare slot'
+          : 'a children set may hold at most one slot per suffix '
+              '("${s.suffix}")');
     }
   }
   final query = [...ownQuery, ...shared, ...sharedQuery];
   return PathNode(
     name: name,
     statics: statics,
-    slot: slot,
+    slots: slots,
     endpoint: endpoint,
     query: query.isEmpty ? null : ParamSchema(query),
     fragment: ownFragment.isEmpty ? null : ParamSchema(ownFragment),
@@ -136,8 +144,13 @@ final class SegBuilder with _Chain {
 }
 
 final class SlotBuilder with _Chain {
-  SlotBuilder._(this.codecs);
+  SlotBuilder._(this.codecs, [this.suffix]);
   final List<Codec<Object?>> codecs;
+
+  /// A literal fused onto the slot's segment (`slot(Ids.image, suffix:
+  /// '_thumb')` → `{imageId}_thumb`). Suffixed slots coexist with the bare
+  /// one under a parent and match first.
+  final String? suffix;
 
   SlotBuilder call(Set<LinkTreeNode?> children) => this..children = children;
   SlotBuilder query(Set<QueryTerm> t) => this.._ownQuery = _terms(t);
@@ -150,7 +163,7 @@ final class SlotBuilder with _Chain {
   /// generated branch indices: `[id, …declared]`.
   SlotBuilder withIdBranch(Codec<Object?> id) {
     final reordered = [id, ...codecs];
-    return SlotBuilder._(reordered)
+    return SlotBuilder._(reordered, suffix)
       ..children = children
       .._ownQuery = _ownQuery
       .._ownFragment = _ownFragment
@@ -158,15 +171,17 @@ final class SlotBuilder with _Chain {
   }
 
   @override
-  Edge _toEdge(List<Term> shared) => SlotEdge(codecs, _node(null, shared));
+  Edge _toEdge(List<Term> shared) =>
+      SlotEdge(codecs, _node(null, shared), suffix: suffix);
 }
 
 /// A path slot: the next segment is one value of [codec]. A union is a single
 /// codec built with `|` — `slot(.uuid(#userId) | .username)` — whose branches are
 /// expanded here, tried in order (first match wins), generating a sealed type at
-/// the use-site.
-SlotBuilder slot(Codec<Object?> codec) => SlotBuilder._(
-    codec is UnionCodec ? [...codec.branches] : [codec]);
+/// the use-site. [suffix] fuses a literal onto the segment
+/// (`slot(Ids.image, suffix: '_thumb')` → `{imageId}_thumb`).
+SlotBuilder slot(Codec<Object?> codec, {String? suffix}) => SlotBuilder._(
+    codec is UnionCodec ? [...codec.branches] : [codec], suffix);
 
 /// A union slot from an explicit codec set — `slots({literal('me'), uuid})`,
 /// tried in order (first match wins).
@@ -254,8 +269,10 @@ QueryTerm requireOneOf(Set<QueryTerm> members) =>
     _Combinator(members, exclusive: true, mandatory: true);
 
 /// A domain root — a URL prefix (scheme + optional host). The first domain in
-/// the tree is the one used for output. Inlined (not an enum): root-only by type.
-final class Domain {
+/// the tree is the one used for output. Inlined (not an enum): root-only by
+/// type. Also placeable bare in a [NavGraph]'s trunk set — the screens tree's
+/// canonical output domain, declared IN the grammar.
+final class Domain implements TreeNode<Never> {
   Domain(this.url);
   final String url;
 

@@ -12,9 +12,10 @@ final class _StaticHit extends _Hit {
 }
 
 final class _SlotHit extends _Hit {
-  const _SlotHit(this.value, this.codec);
+  const _SlotHit(this.value, this.codec, [this.suffix]);
   final Object? value;
   final Codec<Object?> codec;
+  final String? suffix;
 }
 
 /// A successful parse. [path] is the ordered dynamic slot values (statics are
@@ -40,8 +41,12 @@ final class LinkMatch {
   /// The route's structural key: static literals verbatim, each slot as `*`,
   /// joined by `/` (e.g. `user/*`). Uniquely identifies the resolving node —
   /// the discriminator the generated typed layer switches on.
-  String get template =>
-      _hits.map((h) => h is _StaticHit ? h.literal : '*').join('/');
+  String get template => _hits
+      .map((h) => switch (h) {
+            _StaticHit(:final literal) => literal,
+            _SlotHit(:final suffix) => '*${suffix ?? ''}',
+          })
+      .join('/');
 }
 
 /// Strict, bidirectional URL ↔ match codec over a [LinkSpec].
@@ -96,25 +101,38 @@ final class LinkMatcher {
         node = static.child;
         continue;
       }
-      final slot = node.slot;
-      if (slot == null) return null;
+      SlotEdge? hitSlot;
       Object? decoded;
       Codec<Object?>? hitCodec;
       var index = -1;
-      for (var i = 0; i < slot.codecs.length; i++) {
-        final v = slot.codecs[i].decode(token);
-        if (v != null) {
-          decoded = v;
-          hitCodec = slot.codecs[i];
-          index = i;
+      for (final slot in node.slots) {
+        final suffix = slot.suffix;
+        if (suffix != null &&
+            (!token.endsWith(suffix) || token.length == suffix.length)) {
+          continue;
+        }
+        final core = suffix == null
+            ? token
+            : token.substring(0, token.length - suffix.length);
+        for (var i = 0; i < slot.codecs.length; i++) {
+          final v = slot.codecs[i].decode(core);
+          if (v != null) {
+            decoded = v;
+            hitCodec = slot.codecs[i];
+            index = i;
+            break;
+          }
+        }
+        if (hitCodec != null) {
+          hitSlot = slot;
           break;
         }
       }
-      if (hitCodec == null) return null;
-      hits.add(_SlotHit(decoded, hitCodec));
+      if (hitSlot == null || hitCodec == null) return null;
+      hits.add(_SlotHit(decoded, hitCodec, hitSlot.suffix));
       path.add(decoded);
       branches.add(index);
-      node = slot.child;
+      node = hitSlot.child;
     }
     if (!node.resolves) return null;
 
@@ -225,8 +243,8 @@ final class LinkMatcher {
       switch (hit) {
         case _StaticHit(:final literal):
           buf.write(Uri.encodeComponent(literal));
-        case _SlotHit(:final value, :final codec):
-          buf.write(Uri.encodeComponent(codec.encode(value)));
+        case _SlotHit(:final value, :final codec, :final suffix):
+          buf.write(Uri.encodeComponent('${codec.encode(value)}${suffix ?? ''}'));
       }
     }
     final query = _printParams(match.node.query, match.query);
@@ -254,11 +272,13 @@ final class LinkMatcher {
     var pi = 0;
     for (final seg in segments) {
       buf.write('/');
-      if (seg == '*') {
-        final codec = node.slot!.codecs[pi < branches.length ? branches[pi] : 0];
-        buf.write(Uri.encodeComponent(_encChecked(codec, path[pi], 'path segment $pi')));
+      if (seg.startsWith('*')) {
+        final slot = node.slots.firstWhere((s) => s.token == seg);
+        final codec = slot.codecs[pi < branches.length ? branches[pi] : 0];
+        buf.write(Uri.encodeComponent(
+            '${_encChecked(codec, path[pi], 'path segment $pi')}${slot.suffix ?? ''}'));
         pi++;
-        node = node.slot!.child;
+        node = slot.child;
       } else {
         buf.write(Uri.encodeComponent(seg));
         node = node.statics.firstWhere((e) => e.literal == seg).child;

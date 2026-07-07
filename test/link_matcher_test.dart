@@ -14,14 +14,16 @@ final spec = LinkSpec([
         'author',
         PathNode(
           statics: [StaticEdge('me', PathNode(name: 'userMe', endpoint: true))],
-          slot: SlotEdge(
-            [Codec.uuid, Codec.string],
-            PathNode(
-              name: 'author',
-              query: ParamSchema(
-                  [KeyDef('loop', mandatory: false)]), // codec null => flag
+          slots: [
+            SlotEdge(
+              [Codec.uuid, Codec.string],
+              PathNode(
+                name: 'author',
+                query: ParamSchema(
+                    [KeyDef('loop', mandatory: false)]), // codec null => flag
+              ),
             ),
-          ),
+          ],
         ),
       ),
       StaticEdge(
@@ -112,5 +114,56 @@ void main() {
     ]) {
       test(url, () => expect(m.print(m.parse(url)!), url));
     }
+  });
+
+  group('suffix slots', () {
+    final cdn = LinkMatcher(LinkSpec([
+      DomainNode(
+        'https://cdn.example.com',
+        PathNode(statics: [
+          StaticEdge(
+            'ads',
+            PathNode(slots: [
+              SlotEdge([Codec.uuid], PathNode(statics: [
+                StaticEdge('thumb', PathNode(name: 'adThumb')),
+              ], slots: [
+                SlotEdge([Codec.integer], PathNode(name: 'imageThumb'),
+                    suffix: '_thumb'),
+                SlotEdge([Codec.integer], PathNode(name: 'image')),
+              ])),
+            ]),
+          ),
+        ]),
+      ),
+    ]));
+    const ad = '550e8400-e29b-41d4-a716-446655440000';
+
+    test('a suffixed segment strips before decode and templates as *_thumb',
+        () {
+      final match = cdn.parse('https://cdn.example.com/ads/$ad/2_thumb')!;
+      expect(match.path, [ad, 2]);
+      expect(match.template, 'ads/*/*_thumb');
+    });
+
+    test('the bare slot still takes unsuffixed segments', () {
+      final match = cdn.parse('https://cdn.example.com/ads/$ad/2')!;
+      expect(match.template, 'ads/*/*');
+    });
+
+    test('a static sibling wins over both slots', () {
+      expect(cdn.parse('https://cdn.example.com/ads/$ad/thumb')!.template,
+          'ads/*/thumb');
+    });
+
+    test('printRoute appends the suffix', () {
+      expect(
+          cdn.printRoute(template: 'ads/*/*_thumb', path: [ad, 0]),
+          'https://cdn.example.com/ads/$ad/0_thumb');
+    });
+
+    test('round-trips', () {
+      const url = 'https://cdn.example.com/ads/$ad/3_thumb';
+      expect(cdn.print(cdn.parse(url)!), url);
+    });
   });
 }

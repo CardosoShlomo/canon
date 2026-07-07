@@ -439,10 +439,17 @@ TreeNode<P> graft<P, C>(TreeNode<C> child) {
 /// The validated grammar: canonical placements, kinds, and the legality oracle.
 @internal
 final class NavSpec {
+  /// The tree's canonical output domain — a bare [Domain] in the trunk set.
+  String? domain;
+
   NavSpec(Set<TreeNode> trunkScreens) {
     try {
       for (final trunk in trunkScreens) {
         if (trunk is LinkBranch) continue; // generator-read only, not a nav trunk
+        if (trunk is Domain) {
+          domain ??= trunk.url; // the tree's canonical output domain
+          continue;
+        }
         if (trunk is _BackEdge) {
           throw StateError(
               'a back-edge (${trunk.screen}.${trunk.collapse ? 'cycled' : 'stacked'}) '
