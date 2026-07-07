@@ -823,6 +823,11 @@ final class NavGraph {
         out['f:${e.key.name}.$k'] = vals[k];
       }
     }
+    for (final e in _fragmentPathSchema.entries) {
+      final v = _fragmentPathValues[e.key];
+      out['fp:${e.key.name}'] =
+          v == null ? null : encodeFragmentPath(e.value, v);
+    }
     return out;
   }
 
@@ -967,6 +972,12 @@ final class NavGraph {
                     kv.key: _viewCodec(e.key, kv.key)?.encode(kv.value) ?? kv.value,
                 },
           },
+        if (_fragmentPathValues.isNotEmpty)
+          'fragPaths': {
+            for (final e in _fragmentPathValues.entries)
+              e.key.name:
+                  encodeFragmentPath(_fragmentPathSchema[e.key]!, e.value),
+          },
         'scopes': {
           // The synthetic boot scope has no persistable state and no real screen.
           for (final e in _scopes.entries)
@@ -1042,6 +1053,17 @@ final class NavGraph {
         (active != null && built.containsKey(active)) ? active : built.keys.first;
     // Rebuild view-state (decode each token via its codec; flags are raw bools).
     _viewValues.clear();
+    final fragPaths = state['fragPaths'];
+    if (fragPaths is Map) {
+      for (final e in fragPaths.entries) {
+        final screen = _byName[e.key];
+        final roots = screen == null ? null : _fragmentPathSchema[screen];
+        final raw = e.value;
+        if (roots == null || raw is! String) continue;
+        final decoded = decodeFragmentPath(roots, raw);
+        if (decoded != null) _fragmentPathValues[screen!] = decoded;
+      }
+    }
     final views = state['views'];
     if (views is Map) {
       for (final e in views.entries) {
