@@ -1,3 +1,7 @@
+## 0.23.0
+
+- Fragment path: callable face, `operator /` on Codec, strict decode, persistence snapshot.
+
 ## 0.22.0
 
 - The regent 0.4 citizens surface, re-exported.
