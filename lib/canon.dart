@@ -6,6 +6,7 @@ export 'src/nav_graph.dart' hide Nav;
 export 'src/screen_node.dart'
     hide GrammarNode, NavSpec, NavResolution, resolveGo, resolvePop;
 export 'src/screens_annotation.dart';
+export 'src/fragment_path.dart';
 
 // canon is the facade for the runtime model: it re-exports the ledger engine
 // (which carries identifiable) so a consumer imports `canon` and has location,

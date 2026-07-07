@@ -10,6 +10,8 @@
 library;
 
 import 'package:canon_codec/canon_codec.dart';
+
+import 'fragment_path.dart';
 import 'package:meta/meta.dart';
 
 import 'link_dsl.dart';
@@ -64,6 +66,10 @@ final class GrammarNode {
   /// by this; persisted in `toState`, historyless (replaceState) on set.
   Map<String, Codec<Object?>?> viewQuery = const {};
   Map<String, Codec<Object?>?> viewFragment = const {};
+
+  /// The PATH-scheme fragment tree (`fragment.path(...)`), or null. A screen
+  /// declares ONE fragment scheme: pairs (viewFragment) or path — never both.
+  Set<FragmentNode>? viewFragmentPath;
 
   /// The ancestor screen this placement inherits its id from (`.inherit`), or
   /// null. The nav-mirror URL puts the id on the SOURCE only — an inherited
@@ -152,11 +158,9 @@ final class Inherited<S> implements TreeNode<S> {
     return this;
   }
 
-  /// View-state FRAGMENT keys on this inherited placement.
-  Inherited<S> fragment(Set<QueryTerm> terms) {
-    _node.viewFragment = viewSchema(terms);
-    return this;
-  }
+  /// View-state FRAGMENT on this inherited placement — callable for the
+  /// PAIRS scheme (`fragment({...})`), `.path(...)` for the path scheme.
+  FragmentFace<Inherited<S>> get fragment => FragmentFace._(this, _node);
 }
 
 /// A node grafted from another screen family, mounted into this family's tree.
@@ -260,10 +264,47 @@ mixin LinkNode<S extends LinkNode<S>> on Enum implements TreeNode<S> {
     return _self;
   }
 
-  /// Like [query] for the URL `#fragment`.
-  S fragment(Set<QueryTerm> terms) {
-    _attachViewTo(this, (n) => n.viewFragment = viewSchema(terms));
-    return _self;
+  /// Like [query] for the URL `#fragment` — callable for the PAIRS scheme,
+  /// `.path(...)` for the path scheme (`#<id>/thumb`).
+  FragmentFace<S> get fragment {
+    GrammarNode? node;
+    _attachViewTo(this, (n) => node = n);
+    return FragmentFace._(_self, node);
+  }
+}
+
+/// The fragment declaration surface: ONE fragment per screen, ONE scheme —
+/// calling it declares the PAIRS scheme (`#k=v&k2=v2`, exactly the query
+/// machinery); [path] declares the PATH scheme (`#<seg>/<seg>`). The two are
+/// mutually exclusive by assignment: whichever is declared last would
+/// overwrite, so declaring both asserts.
+class FragmentFace<S> {
+  FragmentFace._(this._ret, this._node);
+
+  final S _ret;
+  final GrammarNode? _node;
+
+  /// The PAIRS scheme: named `key(codec)` terms → `#key=value&…`.
+  S call(Set<QueryTerm> terms) {
+    final n = _node;
+    if (n != null) {
+      assert(n.viewFragmentPath == null,
+          'one fragment scheme per screen: path already declared');
+      n.viewFragment = viewSchema(terms);
+    }
+    return _ret;
+  }
+
+  /// The PATH scheme: a codec tree → `#<seg>[/<seg>]*`. [tree] is a bare
+  /// codec, a composed node (`.product / {thumb}`), or a root branch set.
+  S path(Object tree) {
+    final n = _node;
+    if (n != null) {
+      assert(n.viewFragment.isEmpty,
+          'one fragment scheme per screen: pairs already declared');
+      n.viewFragmentPath = fragmentRoots(tree);
+    }
+    return _ret;
   }
 }
 
@@ -366,10 +407,12 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
     return _self;
   }
 
-  /// Like [query] but for the URL FRAGMENT (`#message=`). Same key/codec rules.
-  S fragment(Set<QueryTerm> terms) {
-    _attachView((n) => n.viewFragment = viewSchema(terms));
-    return _self;
+  /// Like [query] but for the URL FRAGMENT (`#message=`) — callable for the
+  /// PAIRS scheme, `.path(...)` for the path scheme (`#<id>/thumb`).
+  FragmentFace<S> get fragment {
+    GrammarNode? node;
+    _attachView((n) => node = n);
+    return FragmentFace._(_self, node);
   }
 
   void _attachView(void Function(GrammarNode) apply) {

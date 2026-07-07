@@ -9,6 +9,7 @@ import 'browser_history.dart';
 import 'link_dsl.dart';
 import 'link_matcher.dart';
 import 'link_spec.dart';
+import 'fragment_path.dart';
 import 'screen_node.dart';
 
 /// What the FLUTTER layer plugs into the pure engine (canon_flutter's
@@ -751,15 +752,43 @@ final class NavGraph {
   /// [toState], mirrored into the URL query/fragment of the active top.
   final Map<Enum, Map<String, Object?>> _viewValues = {};
 
+  /// Per-screen PATH-scheme fragment tree (`fragment.path(...)`) — mutually
+  /// exclusive with a pairs fragment on the same screen.
+  final Map<Enum, Set<FragmentNode>> _fragmentPathSchema = {};
+
+  /// Per-screen live PATH fragment value: the decoded positions in order.
+  /// Mirrored as `#seg/seg` on the active top; null/absent = no fragment.
+  final Map<Enum, List<Object?>> _fragmentPathValues = {};
+
   void _collectViewSchema() {
     void visit(GrammarNode n) {
       if (n.viewQuery.isNotEmpty || n.viewFragment.isNotEmpty) {
         _viewSchema[n.screen] = (query: n.viewQuery, fragment: n.viewFragment);
       }
+      final path = n.viewFragmentPath;
+      if (path != null) _fragmentPathSchema[n.screen] = path;
       n.children.forEach(visit);
     }
 
     spec.trunks.forEach(visit);
+  }
+
+  /// The PATH-scheme fragment value of [screen] — decoded positions in
+  /// order, or null when unset (or when the screen has no path fragment).
+  List<Object?>? fragmentPathOf(Enum screen) => _fragmentPathValues[screen];
+
+  /// Sets (or clears, with null) the PATH fragment of [screen]. The value is
+  /// validated against the declared tree — an illegal path is dropped (the
+  /// strict-codec rule: no fragment rather than a wrong one).
+  void setFragmentPath(Enum screen, List<Object?>? values) {
+    final roots = _fragmentPathSchema[screen];
+    if (roots == null) return;
+    if (values == null || encodeFragmentPath(roots, values) == null) {
+      _fragmentPathValues.remove(screen);
+    } else {
+      _fragmentPathValues[screen] = values;
+    }
+    _host?.refresh();
   }
 
   /// The current value of view-state [key] on [screen] (null = unset/default).
@@ -1087,7 +1116,13 @@ final class NavGraph {
     // The active top's view-state mirrors into ?query / #fragment.
     final schema = _viewSchema[top.screen];
     final q = schema == null ? '' : _encodeView(top.screen, schema.query);
-    final f = schema == null ? '' : _encodeView(top.screen, schema.fragment);
+    var f = schema == null ? '' : _encodeView(top.screen, schema.fragment);
+    // The PATH scheme renders instead of pairs (one scheme per screen).
+    final pathRoots = _fragmentPathSchema[top.screen];
+    final pathVals = _fragmentPathValues[top.screen];
+    if (pathRoots != null && pathVals != null) {
+      f = encodeFragmentPath(pathRoots, pathVals) ?? '';
+    }
     return base + (q.isEmpty ? '' : '?$q') + (f.isEmpty ? '' : '#$f');
   }
 
@@ -1277,6 +1312,15 @@ final class NavGraph {
       _viewValues.remove(top);
       _decodeView(top, schema.query, uri.query);
       _decodeView(top, schema.fragment, uri.fragment);
+    }
+    final pathRoots = _fragmentPathSchema[top];
+    if (pathRoots != null) {
+      final uri = Uri.parse(url);
+      _fragmentPathValues.remove(top);
+      final decoded = uri.fragment.isEmpty
+          ? null
+          : decodeFragmentPath(pathRoots, uri.fragment);
+      if (decoded != null) _fragmentPathValues[top] = decoded;
     }
     _host?.refresh();
     return true;
