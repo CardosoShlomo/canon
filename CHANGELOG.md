@@ -1,3 +1,7 @@
+## 0.26.0
+
+- regent ^0.8.0 (BREAKING via re-export: guards judge through `read`, no stores facade).
+
 ## 0.25.0
 
 - The entity grammar (`Entities`, `EntityNode`, `EntityGraph`, …) moves in from identifiable — a spec grammar, sibling of the screen tiers.
