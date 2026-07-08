@@ -14,16 +14,14 @@ final spec = LinkSpec([
         'author',
         PathNode(
           statics: [StaticEdge('me', PathNode(name: 'userMe', endpoint: true))],
-          slots: [
-            SlotEdge(
-              [Codec.uuid, Codec.string],
-              PathNode(
-                name: 'author',
-                query: ParamSchema(
-                    [KeyDef('loop', mandatory: false)]), // codec null => flag
-              ),
+          slot: SlotEdge(
+            [Codec.uuid, Codec.string],
+            PathNode(
+              name: 'author',
+              query: ParamSchema(
+                  [KeyDef('loop', mandatory: false)]), // codec null => flag
             ),
-          ],
+          ),
         ),
       ),
       StaticEdge(
@@ -116,52 +114,57 @@ void main() {
     }
   });
 
-  group('suffix slots', () {
+  group('affix segments via concat codec', () {
+    // `ads/<id>/<index>` and `ads/<id>/<index>_thumb` — one union slot whose
+    // thumb branch is a concat codec. No structural suffix; the codec carries it.
     final cdn = LinkMatcher(LinkSpec([
       DomainNode(
         'https://cdn.example.com',
         PathNode(statics: [
           StaticEdge(
             'ads',
-            PathNode(slots: [
-              SlotEdge([Codec.uuid], PathNode(statics: [
-                StaticEdge('thumb', PathNode(name: 'adThumb')),
-              ], slots: [
-                SlotEdge([Codec.integer], PathNode(name: 'imageThumb'),
-                    suffix: '_thumb'),
-                SlotEdge([Codec.integer], PathNode(name: 'image')),
-              ])),
-            ]),
+            PathNode(slot: SlotEdge([Codec.uuid], PathNode(statics: [
+              StaticEdge('thumb', PathNode(name: 'adThumb')),
+            ], slot: SlotEdge([
+              Codec.integer + Codec.literal('_thumb'), // branch 0
+              Codec.integer, // branch 1
+            ], PathNode(name: 'image', endpoint: true))))),
           ),
         ]),
       ),
     ]));
     const ad = '550e8400-e29b-41d4-a716-446655440000';
 
-    test('a suffixed segment strips before decode and templates as *_thumb',
-        () {
+    test('the concat branch decodes the affixed segment (template stays *)', () {
       final match = cdn.parse('https://cdn.example.com/ads/$ad/2_thumb')!;
       expect(match.path, [ad, 2]);
-      expect(match.template, 'ads/*/*_thumb');
-    });
-
-    test('the bare slot still takes unsuffixed segments', () {
-      final match = cdn.parse('https://cdn.example.com/ads/$ad/2')!;
       expect(match.template, 'ads/*/*');
+      expect(match.branches, [0, 0]); // uuid slot single, then thumb branch 0
     });
 
-    test('a static sibling wins over both slots', () {
+    test('the bare branch takes the unaffixed segment', () {
+      final match = cdn.parse('https://cdn.example.com/ads/$ad/2')!;
+      expect(match.branches, [0, 1]);
+    });
+
+    test('a static sibling still wins over the slot', () {
       expect(cdn.parse('https://cdn.example.com/ads/$ad/thumb')!.template,
           'ads/*/thumb');
     });
 
-    test('printRoute appends the suffix', () {
+    test('printRoute picks the codec by branch (thumb)', () {
       expect(
-          cdn.printRoute(template: 'ads/*/*_thumb', path: [ad, 0]),
+          cdn.printRoute(template: 'ads/*/*', path: [ad, 0], branches: [0, 0]),
           'https://cdn.example.com/ads/$ad/0_thumb');
     });
 
-    test('round-trips', () {
+    test('printRoute bare branch', () {
+      expect(
+          cdn.printRoute(template: 'ads/*/*', path: [ad, 0], branches: [0, 1]),
+          'https://cdn.example.com/ads/$ad/0');
+    });
+
+    test('round-trips the affixed url', () {
       const url = 'https://cdn.example.com/ads/$ad/3_thumb';
       expect(cdn.print(cdn.parse(url)!), url);
     });

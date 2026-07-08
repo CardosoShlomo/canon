@@ -44,7 +44,7 @@ PathNode _assemble({
   // cascade — a fragment is terminal (one `#…` per URL), so it's own-node only.
   final childShared = [...shared, ...sharedQuery];
   final statics = <StaticEdge>[];
-  final slots = <SlotEdge>[];
+  SlotEdge? slot;
   var endpoint = false;
   for (final child in children) {
     if (child == null) {
@@ -55,25 +55,18 @@ PathNode _assemble({
     if (edge is StaticEdge) {
       statics.add(edge);
     } else {
-      slots.add(edge as SlotEdge);
-    }
-  }
-  // Suffixed slots match before the bare one; at most one of each shape.
-  slots.sort((a, b) => (a.suffix == null ? 1 : 0) - (b.suffix == null ? 1 : 0));
-  final seen = <String?>{};
-  for (final s in slots) {
-    if (!seen.add(s.suffix)) {
-      throw StateError(s.suffix == null
-          ? 'a children set may hold at most one bare slot'
-          : 'a children set may hold at most one slot per suffix '
-              '("${s.suffix}")');
+      if (slot != null) {
+        throw StateError('a children set may hold at most one slot — '
+            'express alternatives as a union codec (`slot(a | b)`)');
+      }
+      slot = edge as SlotEdge;
     }
   }
   final query = [...ownQuery, ...shared, ...sharedQuery];
   return PathNode(
     name: name,
     statics: statics,
-    slots: slots,
+    slot: slot,
     endpoint: endpoint,
     query: query.isEmpty ? null : ParamSchema(query),
     fragment: ownFragment.isEmpty ? null : ParamSchema(ownFragment),
@@ -144,13 +137,8 @@ final class SegBuilder with _Chain {
 }
 
 final class SlotBuilder with _Chain {
-  SlotBuilder._(this.codecs, [this.suffix]);
+  SlotBuilder._(this.codecs);
   final List<Codec<Object?>> codecs;
-
-  /// A literal fused onto the slot's segment (`slot(Ids.image, suffix:
-  /// '_thumb')` → `{imageId}_thumb`). Suffixed slots coexist with the bare
-  /// one under a parent and match first.
-  final String? suffix;
 
   SlotBuilder call(Set<LinkTreeNode?> children) => this..children = children;
   SlotBuilder query(Set<QueryTerm> t) => this.._ownQuery = _terms(t);
@@ -163,7 +151,7 @@ final class SlotBuilder with _Chain {
   /// generated branch indices: `[id, …declared]`.
   SlotBuilder withIdBranch(Codec<Object?> id) {
     final reordered = [id, ...codecs];
-    return SlotBuilder._(reordered, suffix)
+    return SlotBuilder._(reordered)
       ..children = children
       .._ownQuery = _ownQuery
       .._ownFragment = _ownFragment
@@ -171,17 +159,16 @@ final class SlotBuilder with _Chain {
   }
 
   @override
-  Edge _toEdge(List<Term> shared) =>
-      SlotEdge(codecs, _node(null, shared), suffix: suffix);
+  Edge _toEdge(List<Term> shared) => SlotEdge(codecs, _node(null, shared));
 }
 
 /// A path slot: the next segment is one value of [codec]. A union is a single
 /// codec built with `|` — `slot(.uuid(#userId) | .username)` — whose branches are
 /// expanded here, tried in order (first match wins), generating a sealed type at
-/// the use-site. [suffix] fuses a literal onto the segment
-/// (`slot(Ids.image, suffix: '_thumb')` → `{imageId}_thumb`).
-SlotBuilder slot(Codec<Object?> codec, {String? suffix}) => SlotBuilder._(
-    codec is UnionCodec ? [...codec.branches] : [codec], suffix);
+/// the use-site. An affix segment (`{imageId}_thumb`) is a concat codec —
+/// `slot(Ids.image + Codec.literal('_thumb'))`.
+SlotBuilder slot(Codec<Object?> codec) => SlotBuilder._(
+    codec is UnionCodec ? [...codec.branches] : [codec]);
 
 /// A union slot from an explicit codec set — `slots({literal('me'), uuid})`,
 /// tried in order (first match wins).

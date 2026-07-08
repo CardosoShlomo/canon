@@ -61,27 +61,18 @@ final class StaticEdge extends Edge {
 }
 
 final class SlotEdge extends Edge {
-  const SlotEdge(this.codecs, super.child, {this.suffix});
+  const SlotEdge(this.codecs, super.child);
   final List<Codec<Object?>> codecs;
-
-  /// A literal fused onto the slot's segment (`{imageId}_thumb`): the token
-  /// must end with it; the codec sees the remainder. Null = the whole segment.
-  final String? suffix;
-
-  /// The segment's template token — `*` bare, `*_thumb` suffixed.
-  String get token => '*${suffix ?? ''}';
 }
 
-/// One path position. Statics are tried first, then slots in declaration
-/// order — suffixed slots before the (at most one) bare slot, so `0_thumb`
-/// never falls into a bare string slot.
+/// One path position. Statics are tried before the (at most one) slot.
 /// A node resolves (is an endpoint) when [endpoint] is set, when it has a query
 /// or fragment schema (params imply resolution), or when it is a leaf.
 final class PathNode {
   PathNode({
     this.name,
     this.statics = const [],
-    this.slots = const [],
+    this.slot,
     this.endpoint = false,
     this.query,
     this.fragment,
@@ -89,14 +80,14 @@ final class PathNode {
 
   final String? name;
   final List<StaticEdge> statics;
-  final List<SlotEdge> slots;
+  final SlotEdge? slot;
   final bool endpoint;
   final ParamSchema? query;
   final ParamSchema? fragment;
 
   bool get resolves =>
       endpoint || query != null || fragment != null || _isLeaf;
-  bool get _isLeaf => statics.isEmpty && slots.isEmpty;
+  bool get _isLeaf => statics.isEmpty && slot == null;
 }
 
 /// A domain root: a URL prefix (scheme + optional host + optional base path) and

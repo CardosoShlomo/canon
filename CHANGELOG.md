@@ -1,3 +1,8 @@
+## 0.24.0
+
+- `@canon` — one spec mark, dispatched by node mixin; link domain declared in the tree via `Domain('…')`.
+- Affix segments via concat codec (`slot(id + Codec.literal('_thumb'))`) — structural `suffix:` removed; slots stay single, alternatives are unions.
+
 ## 0.23.0
 
 - Fragment path: callable face, `operator /` on Codec, strict decode, persistence snapshot.
