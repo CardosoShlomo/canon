@@ -1,3 +1,7 @@
+## 0.25.0
+
+- The entity grammar (`Entities`, `EntityNode`, `EntityGraph`, …) moves in from identifiable — a spec grammar, sibling of the screen tiers.
+
 ## 0.24.0
 
 - `@canon` — one spec mark, dispatched by node mixin; link domain declared in the tree via `Domain('…')`.
