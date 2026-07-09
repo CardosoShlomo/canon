@@ -1,3 +1,7 @@
+## 0.27.0
+
+- regent ^0.9.0 (BREAKING via re-export: verdicts and awaits state become consumer rows; unit merge edges; CoveredRanges).
+
 ## 0.26.0
 
 - regent ^0.8.0 (BREAKING via re-export: guards judge through `read`, no stores facade).
