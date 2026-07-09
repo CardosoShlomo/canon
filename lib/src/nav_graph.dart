@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 
 import 'package:canon_codec/canon_codec.dart';
+import 'package:regent/regent.dart' show Msg;
 
 import 'browser_history.dart';
 
@@ -158,17 +159,187 @@ class NavScope {
   final List<NavSlot> slots = [];
 }
 
-/// The batch's working state: per-scope stacks plus the active scope.
-class _Sim {
-  _Sim(this.stacks, this.active);
+/// The navigation STATE as a pure value: per-scope stacks, the active
+/// trunk, and the batch's commit mode. Verbs are [NavOp] facts folded by
+/// [navReduce]; the graph holds a pending state per microtask batch and
+/// commits the diff once. Immutable — every fold returns a new value, so
+/// the fold replays.
+class NavState {
+  const NavState({
+    required this.stacks,
+    required this.active,
+    this.mode = .push,
+    this.pendingReplace = false,
+  });
 
   final Map<Enum, List<StackEntry>> stacks;
-  Enum active;
+  final Enum active;
 
-  /// Set once per batch by [NavGraph.markReplace]; rides to [Navigation.mode].
-  CommitMode mode = .push;
+  /// Rides to [Navigation.mode]; set by a [MarkReplaceOp], consumed by the
+  /// next go.
+  final CommitMode mode;
+  final bool pendingReplace;
 
   List<StackEntry> get stack => stacks[active]!;
+
+  NavState copy({
+    Map<Enum, List<StackEntry>>? stacks,
+    Enum? active,
+    CommitMode? mode,
+    bool? pendingReplace,
+  }) =>
+      NavState(
+        stacks: stacks ?? this.stacks,
+        active: active ?? this.active,
+        mode: mode ?? this.mode,
+        pendingReplace: pendingReplace ?? this.pendingReplace,
+      );
+
+  /// This state with [active]'s stack replaced.
+  NavState withStack(List<StackEntry> next) =>
+      copy(stacks: {...stacks, active: next});
+}
+
+/// A navigation VERB as a FACT — a [Msg], so a ledger can journal, judge,
+/// and replay navigation like any other truth; [navReduce] folds it.
+/// Placement legality still runs in the pure resolvers; an illegal op
+/// throws (a programmer error, not a state).
+sealed class NavOp extends Msg {
+  const NavOp();
+}
+
+class GoOp extends NavOp {
+  const GoOp(this.screen, this.id, {this.edgeRequired = false});
+  final Enum screen;
+  final Object? id;
+  final bool edgeRequired;
+}
+
+class PopOp extends NavOp {
+  const PopOp([this.until]);
+  final Enum? until;
+}
+
+class PopToOp extends NavOp {
+  const PopToOp(this.until);
+  final Enum until;
+}
+
+class ForgetOp extends NavOp {
+  const ForgetOp(this.keep);
+  final Enum keep;
+}
+
+class MarkReplaceOp extends NavOp {
+  const MarkReplaceOp();
+}
+
+/// The PURE navigation fold — the verb semantics as a function of
+/// (state, op): idempotent-tap no-ops, boot exit, trunk park/seed, the
+/// collapse>edge>canonical ladder, targeted pops, keep maintenance. Throws
+/// are programmer errors (stale handles, unprovable pops), not states.
+/// [warn] hosts the canonical-fallback diagnostic.
+NavState navReduce(NavSpec spec, NavState s, NavOp op,
+    {void Function(String)? warn}) {
+  StackEntry seed(Enum trunk, [Object? id]) =>
+      StackEntry(spec.canonical[trunk]!, id);
+  List<StackEntry> applied(List<StackEntry> stack, NavResolution res) => [
+        ...stack.sublist(0, stack.length - res.popCount),
+        ...res.pushes,
+      ];
+  switch (op) {
+    case MarkReplaceOp():
+      return s.copy(pendingReplace: true);
+
+    case GoOp(:final screen, :final id, :final edgeRequired):
+      // Idempotent: going to the current top with the same id is a no-op —
+      // no commit, no history entry (re-tapping the active tab does
+      // nothing). Boot is excluded — the first commit must run. A declared
+      // STACKED self-edge overrides.
+      if (s.active != BootScreen.root &&
+          s.stack.isNotEmpty &&
+          s.stack.last.screen == screen &&
+          s.stack.last.id == id &&
+          !spec.edgeStacks(s.stack.last.node, screen)) {
+        return s;
+      }
+      var st = s.pendingReplace
+          ? s.copy(mode: .replace, pendingReplace: false)
+          : s;
+      if (st.active == BootScreen.root) {
+        // First commit out of boot: drop the boot entry, seed the target's
+        // trunk fresh, and force replace — the loading screen leaves no
+        // history.
+        final trunk = spec.trunkOf(screen);
+        final stacks = {...st.stacks}..remove(BootScreen.root);
+        stacks[trunk] = [seed(trunk, id)];
+        st = st.copy(stacks: stacks, active: trunk, mode: .replace);
+        if (screen == trunk) return st;
+        return st.withStack(applied(
+            st.stack,
+            resolveGo(spec, st.stack, screen, id,
+                onCanonicalFallback: warn)));
+      }
+      if (edgeRequired) {
+        if (st.stack.isEmpty || spec.edge(st.stack.last.node, screen) == null) {
+          final from =
+              st.stack.isEmpty ? 'an empty stack' : st.stack.last.screen.name;
+          throw StateError(
+              'cannot go to "${screen.name}" from "$from" — not a reachable edge (stale handle?)');
+        }
+        return st
+            .withStack(applied(st.stack, resolveGo(spec, st.stack, screen, id)));
+      }
+      final trunk = spec.trunkOf(screen);
+      if (trunk != st.active) {
+        // Leaving a tab with no keep resets it; a tab with any keep parks.
+        final stacks = {...st.stacks};
+        if (!spec.retains(st.active)) stacks[st.active] = [seed(st.active)];
+        final seeded = stacks[trunk] ??= [seed(trunk, id)];
+        if (id != null && seeded.first.id != id) {
+          stacks[trunk] = [seed(trunk, id)];
+        }
+        st = st.copy(stacks: stacks, active: trunk);
+        if (screen == trunk) return st;
+      }
+      return st.withStack(applied(st.stack,
+          resolveGo(spec, st.stack, screen, id, onCanonicalFallback: warn)));
+
+    case PopOp(:final until):
+      final st = s.pendingReplace
+          ? s.copy(mode: .replace, pendingReplace: false)
+          : s;
+      final res = resolvePop(st.stack, until);
+      if (res == null) {
+        throw StateError(
+            'pop(${until?.name ?? ''}) is impossible from ${st.stack.map((e) => e.screen.name)} — guard unprovable pops with Screen.canPop');
+      }
+      return st.withStack(applied(st.stack, res));
+
+    case PopToOp(:final until):
+      if (s.stack.isNotEmpty && s.stack.last.screen == until) return s;
+      final res = resolvePop(s.stack, until);
+      if (res == null) {
+        throw StateError('popTo(${until.name}) — not reachable on the live stack');
+      }
+      return s.withStack(applied(s.stack, res));
+
+    case ForgetOp(:final keep):
+      assert(spec.keeps.contains(keep), '"${keep.name}" is not a keep');
+      final trunk = spec.trunkOf(keep);
+      if (trunk == s.active) {
+        throw StateError(
+            'cannot forget "${keep.name}" — it is in the currently active stack');
+      }
+      final stack = s.stacks[trunk];
+      final idx = stack == null ? -1 : stack.indexWhere((e) => e.screen == keep);
+      if (idx < 0) {
+        throw StateError('cannot forget "${keep.name}" — it is not mounted');
+      }
+      final cut = stack!.sublist(0, idx);
+      return s.copy(
+          stacks: {...s.stacks, trunk: cut.isEmpty ? [seed(trunk)] : cut});
+  }
 }
 
 /// A direct stack seed (trunk..target chain of (screen, id)) for the `seedChain:`
@@ -684,7 +855,7 @@ final class NavGraph {
   /// Visited trunks in spec order — IndexedStack children stay stable.
   final List<Enum> _visited = [];
   late Enum _activeTrunk;
-  _Sim? _sim;
+  NavState? _pending;
 
   /// The consumer's boot loading UI (a `W`), shown for the [BootScreen.root]
   /// entry; null when the graph was seeded from a chain instead.
@@ -927,24 +1098,14 @@ final class NavGraph {
   /// Set by the generated `Screen.replace` before the chain's gos. The NEXT
   /// commit this turn consumes it (its [Navigation.mode] becomes [replace]); if
   /// the chain short-circuits with no commit (`Screen.replace.on(.x)?` missed),
-  /// a microtask drops it so it can never leak into a later navigation.
-  bool _pendingReplace = false;
+  /// the batch's commit clears it so it can never leak into a later
+  /// navigation.
 
   /// Marks the batching navigation as a history [CommitMode.replace] rather than
   /// a push. Inert on the bare stack engine (no history); the web Router delegate
   /// reads [Navigation.mode] to `replaceState`.
   @internal
-  void markReplace() {
-    _pendingReplace = true;
-    scheduleMicrotask(() => _pendingReplace = false);
-  }
-
-  // Fold a pending replace into [sim] at the first commit of the turn.
-  void _consumeReplace(_Sim sim) {
-    if (!_pendingReplace) return;
-    sim.mode = .replace;
-    _pendingReplace = false;
-  }
+  void markReplace() => _fold(const MarkReplaceOp());
 
   /// Canonical encoding of the live tree's shape — the generator emits the same
   /// string from source, so a mismatch flags stale codegen.
@@ -1364,7 +1525,7 @@ final class NavGraph {
   /// The live placement path of the active top, trunk-first.
   List<Enum> get currentChain {
     final node =
-        (_sim?.stack.last ?? _activeScope.slots.last.entry).node.resolved;
+        (_pending?.stack.last ?? _activeScope.slots.last.entry).node.resolved;
     final chain = <Enum>[];
     for (GrammarNode? n = node; n != null; n = n.parent) {
       chain.insert(0, n.screen);
@@ -1384,81 +1545,34 @@ final class NavGraph {
           ..slots.add(NavSlot(_seed(trunk, id), animate: false));
       });
 
-  _Sim _ensureSim() => _sim ??= _Sim(
-        {
+  NavState _ensurePending() => _pending ??= NavState(
+        stacks: {
           for (final e in _scopes.entries)
             e.key: [for (final s in e.value.slots) s.entry]
         },
-        _activeTrunk,
+        active: _activeTrunk,
       );
+
+  /// Fold [op] into the pending state — the ONE mutation path. A no-op fold
+  /// schedules nothing; a throwing fold aborts the batch (programmer error).
+  void _fold(NavOp op) {
+    final before = _ensurePending();
+    final NavState after;
+    try {
+      after = navReduce(spec, before, op, warn: _warnCanonical);
+    } catch (_) {
+      _pending = null;
+      rethrow;
+    }
+    _pending = after;
+    if (!identical(after, before)) _schedule();
+  }
 
   @internal
   Nav go<T>(Enum screen, [T? id, bool edgeRequired = false]) {
     assert(
         id != null || null is T || T == Never, '"${screen.name}" requires an id');
-    final sim = _ensureSim();
-    // Idempotent: going to the current top with the same id is a no-op — no
-    // commit, no history entry, no rebuild (so re-tapping the active tab does
-    // nothing). Checked before consuming any replace flag so a chain's later
-    // segment still sees it. Boot is excluded — the first commit must run.
-    // A declared STACKED self-edge overrides: `user.stacked` means a fresh
-    // instance is legitimate even at the same (screen, id).
-    if (sim.active != BootScreen.root &&
-        sim.stack.isNotEmpty &&
-        sim.stack.last.screen == screen &&
-        sim.stack.last.id == id &&
-        !spec.edgeStacks(sim.stack.last.node, screen)) {
-      return _nav;
-    }
-    _consumeReplace(sim);
-    final target = screen;
-    if (sim.active == BootScreen.root) {
-      // First commit out of boot: drop the boot entry, seed the target's trunk
-      // fresh, and force replace — the loading screen leaves no history. The
-      // resolver stays cold/warm-unaware (it just writes `Screen.goX()`).
-      final trunk = spec.trunkOf(target);
-      sim.stacks.remove(BootScreen.root);
-      sim.active = trunk;
-      sim.stacks[trunk] = [_seed(trunk, id)];
-      sim.mode = .replace;
-      if (target != trunk) {
-        _apply(sim,
-            resolveGo(spec, sim.stack, target, id, onCanonicalFallback: _warnCanonical));
-      } else {
-        _schedule();
-      }
-      return _nav;
-    }
-    if (edgeRequired) {
-      if (sim.stack.isEmpty || spec.edge(sim.stack.last.node, target) == null) {
-        final from =
-            sim.stack.isEmpty ? 'an empty stack' : sim.stack.last.screen.name;
-        _sim = null;
-        throw StateError(
-            'cannot go to "${target.name}" from "$from" — not a reachable edge (stale handle?)');
-      }
-      _apply(sim, resolveGo(spec, sim.stack, target, id));
-      return _nav;
-    }
-    final trunk = spec.trunkOf(target);
-    if (trunk != sim.active) {
-      // Leaving a tab with no keep resets it; a tab with any keep parks.
-      if (!spec.retains(sim.active)) {
-        sim.stacks[sim.active] = [_seed(sim.active)];
-      }
-      sim.active = trunk;
-      final seeded = sim.stacks.putIfAbsent(trunk, () => [_seed(trunk, id)]);
-      if (id != null && seeded.first.id != id) {
-        sim.stacks[trunk] = [_seed(trunk, id)];
-      }
-      if (target == trunk) {
-        _schedule();
-        return _nav;
-      }
-    }
-    final res =
-        resolveGo(spec, sim.stack, target, id, onCanonicalFallback: _warnCanonical);
-    _apply(sim, res);
+    _fold(GoOp(screen, id, edgeRequired: edgeRequired));
     return _nav;
   }
 
@@ -1473,15 +1587,7 @@ final class NavGraph {
       historyGo(-1); // popstate restores the parent blob + its back-index
       return _nav;
     }
-    final sim = _ensureSim();
-    _consumeReplace(sim);
-    final res = resolvePop(sim.stack, until);
-    if (res == null) {
-      _sim = null;
-      throw StateError(
-          'pop(${until?.name ?? ''}) is impossible from ${sim.stack.map((e) => e.screen.name)} — guard unprovable pops with Screen.canPop');
-    }
-    _apply(sim, res);
+    _fold(PopOp(until));
     return _nav;
   }
 
@@ -1490,14 +1596,7 @@ final class NavGraph {
   /// `at(.x)?.goChild()` (pop-to-self-if-needed, then go) batches into one diff.
   @internal
   Nav popTo(Enum until) {
-    final sim = _ensureSim();
-    if (sim.stack.isNotEmpty && sim.stack.last.screen == until) return _nav;
-    final res = resolvePop(sim.stack, until);
-    if (res == null) {
-      _sim = null;
-      throw StateError('popTo(${until.name}) — not reachable on the live stack');
-    }
-    _apply(sim, res);
+    _fold(PopToOp(until));
     return _nav;
   }
 
@@ -1506,32 +1605,7 @@ final class NavGraph {
   /// isn't mounted, or if it's in the currently active stack — forget is
   /// parked-only scope maintenance, not a pop. Not chainable.
   @internal
-  void forget(Enum keep) {
-    assert(spec.keeps.contains(keep), '"${keep.name}" is not a keep');
-    final sim = _ensureSim();
-    final trunk = spec.trunkOf(keep);
-    if (trunk == sim.active) {
-      _sim = null;
-      throw StateError(
-          'cannot forget "${keep.name}" — it is in the currently active stack');
-    }
-    final stack = sim.stacks[trunk];
-    final idx = stack == null ? -1 : stack.indexWhere((e) => e.screen == keep);
-    if (idx < 0) {
-      _sim = null;
-      throw StateError('cannot forget "${keep.name}" — it is not mounted');
-    }
-    final cut = stack!.sublist(0, idx);
-    sim.stacks[trunk] = cut.isEmpty ? [_seed(trunk)] : cut;
-    _schedule();
-  }
-
-  void _apply(_Sim sim, NavResolution res) {
-    final stack = sim.stack;
-    stack.removeRange(stack.length - res.popCount, stack.length);
-    stack.addAll(res.pushes);
-    _schedule();
-  }
+  void forget(Enum keep) => _fold(ForgetOp(keep));
 
   void _schedule() {
     if (_scheduled) return;
@@ -1540,9 +1614,9 @@ final class NavGraph {
   }
 
   void _commit() {
-    final sim = _sim;
+    final sim = _pending;
     _scheduled = false;
-    _sim = null;
+    _pending = null;
     if (sim == null) return;
     _floorFace = null; // a real navigation supersedes any bare-floor face
     final fromEntry = _activeScope.slots.last.entry;

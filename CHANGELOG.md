@@ -1,3 +1,8 @@
+## 0.28.0
+
+- The engine folds: navigation state is a pure value (`NavState`) and every verb a `NavOp` FACT (a regent `Msg`) folded by `navReduce` — journalable, judgeable, replayable; `NavGraph` interprets (history, host, batching).
+- regent ^0.10.0 (pure-fold memories).
+
 ## 0.27.0
 
 - regent ^0.9.0 (BREAKING via re-export: verdicts and awaits state become consumer rows; unit merge edges; CoveredRanges).
