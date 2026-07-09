@@ -395,11 +395,13 @@ the rows top to bottom. One order, two opposite roles:
   value) and can never touch the message. What it sees is whatever survived
   the guards above its row.
 - A **guard** row is a pure JUDGE of the flow: it folds nothing and holds
-  no state, but decides what every row below it sees — pass, drop, or
-  rewrite (`Guard.judge`); a `Veto` is the boolean specialization. Guards
-  read the world only through the generated read-only `Stores` facade, so
-  they are replayable by construction — and they expose NOTHING consumable
-  (no state, no stream): observation is stores-only, by design.
+  no state, but decides what every row below it sees. `Guard.judge` returns
+  the feed itself — `{}` drops, `{msg}` passes, `{other}` rewrites,
+  `{a, b, …}` fans out policy facts in set order; a `Veto` is the boolean
+  specialization. Guards read the ledger's own state by CITIZEN IDENTITY —
+  `read(const Todos())` — so they are replayable by construction (a
+  replayed ledger reads itself), and build-time citizenship checks that
+  every read names a row of the enum.
 
 Moving a store changes what IT sees; moving a guard changes what EVERYONE
 below it sees. The journal always keeps the original fact — guards shape
@@ -412,7 +414,8 @@ enum _Regents with RegentNode<_Regents> {
   todosCovered(TodosCovered()),       // coverage folds first
   cachedTodosGate(CachedTodosGate()), // the veto — protects every row below
   localTodos(LocalTodos()),           // the disk-cache shadow
-  todos(Todos());                     // the main store
+  todos(Todos()),                     // the main store
+  nav(NavUnit());                     // the stack — the session's LAST reader
 
   const _Regents(this.regent);
   @override
@@ -423,51 +426,68 @@ enum _Regents with RegentNode<_Regents> {
   };
 }
 
-final class CachedTodosGate extends Veto<CachedTodosMsg, Stores> {
+final class CachedTodosGate extends Veto<CachedTodosMsg> {
   const CachedTodosGate();
   @override
-  bool block(Envelope env, CachedTodosMsg msg, Stores stores) =>
-      stores.todosCovered.value;
+  bool block(Envelope env, CachedTodosMsg msg, ReadStore read) =>
+      read(const TodosCovered());
 }
 ```
 
 **Merges** are read-time edges, never copied state: the enum's static
-`merges` set declares that one store READS-FROM another through a
-projection (`row ?? local`). Store rows only, both ends — build-checked; a
-unit source answers at its state's own id (the viewer answering reads of
-herself), a store source lends its whole collection. Chain `.from(...)` for
-multiple sources; resolution follows declaration order.
+`merges` set declares that one row READS-FROM another through a projection
+(`row ?? local`). A unit source answers a store's reads at its state's own
+id (the viewer answering reads of herself), a store source lends its whole
+collection, and a unit can read from a unit (a write dock's promise
+answering instantly). Chain `.from(...)` for multiple sources; resolution
+follows declaration order.
 
-**The four rows above are the offline pattern, whole**: a boot-time cache
+**The cache rows above are the offline pattern, whole**: a boot-time cache
 fact folds into the SHADOW (absent-only), the merge lets the shadow answer
 the main store's reads instantly, the coverage unit records when the live
 authority has spoken, and the gate drops late cache facts from that moment
 on. Cold start renders from disk; truth wins the instant it arrives.
 
-**Optimism is declared, not wired.** A store's `Verdict` names a PREDICTION
-family and a RESOLVER family: a prediction folds instantly as a pending
-overlay (base state is never touched, so rollback can't clobber a confirmed
-write), the resolver settles it by STATE COMPARISON — re-applying the
-prediction as a no-op confirms; silence past the deadline reverts; a
-partial apply lands `amended`. No wire correlation ids. The wire request
-itself can BE the prediction — one dispatch sends and folds:
+**Every status is a ROW — a memory holds nothing but its fold.** There is
+no flags sidecar, no overlay machinery, no hidden anything: what a UI could
+render or a judge could rule on is honest state that replays.
+
+- **Coverage** — recorded permission to treat absence as knowledge: a
+  `CoveredRanges` row per paged surface; a page gate resolves the window a
+  page was exhaustive about and fans out ONE ruling fact that mains,
+  shadows, and the coverage row each fold. Inside a covered window,
+  not-listed means GONE; outside, absence is silence.
+- **Optimism is a WRITE DOCK** — rows, not machinery: a pending side row
+  holds the promise (base has no arm for it, so confirmed truth never
+  lies), a merge edge shows it instantly, a gate settles it against echoes
+  by STATE COMPARISON, and the deadline is an EFFECT dispatching a timeout
+  FACT the gate judges like any other. Confirm/revert/amend orders are
+  statable as replay laws.
+- **In-flight is a row**: a request fact folds its key in, the answering
+  facts fold it out; a dedupe gate reading it drops duplicate asks.
+- **Scope entry is a FACT**: a committed navigation dispatches a generated
+  `<Screen>EnteredMsg`; ask/refetch policy is an ordinary gate judging it.
+
+**Navigation itself is ledger-owned.** With a `nav(NavUnit())` row, every
+`Screen.goXx()` dispatches a `NavOp` fact through the queue — auth walls
+and redirects are gates, the stack is a pure fold (`navReduce`), and the
+journal carries the session whole: state, writes, connection, movement.
+Replay it and the app is reproduced, not approximated. (Without the row,
+navigation folds locally through the same pure engine — a grammar-only
+consumer never sees the ledger at all.)
+
+**Order-independence is a LAW you run.** `replay(rows, order)` folds the
+whole enum synchronously and returns every citizen's state:
 
 ```dart
-final class CompleteVerdict extends Verdict<CompleteTodo, TodoToggled> {
-  const CompleteVerdict();
-}
-
-final class Todos extends Store<TodoId, Todo, TodoMsg> {
-  const Todos() : super(verdict: const CompleteVerdict());
-  // reduce: CompleteTodo and TodoToggled fold the same absolute fact
-}
+expect(replay(Rows.values, [cache, authority]),
+       equals(replay(Rows.values, [authority, cache])));
 ```
 
-One discipline this buys into: **facts are absolute** —
-`CompleteTodo(done: true)`, never `ToggleTodo` — because only an absolute
-fact re-applies as a no-op. Every entry carries `Flags`
-(`pending / confirmed / reverted / amended / stale / failed` + `tampered`),
-so the UI can tell a hope from a truth.
+Cross-source races (disk vs wire) must converge; within one source, the
+journal's order IS truth order. Facts are ABSOLUTE (`CompleteTodo(done:
+true)`, never `Toggle`) so echoes land as no-ops; a msg's TYPE is its
+source — precedence lives on the sealed family, never on a transport.
 
 **Message conventions** (the rules the engine can't enforce): messages are
 facts, not calls (`TodoAdded`, never `AddTodo`-the-handler); semantic
@@ -476,21 +496,20 @@ sealed family per entity concern, so a new variant is a compile error until
 every store answers it (a SHADOW may reduce the root `Msg` and delegate).
 
 Codegen wires all of it from the enum — the memories bound in row order,
-the guards with their facade, the merge edges, the `Stores` facade itself —
-and `Screen.manager` binds the ledger on first use. Reads in Flutter are
+the guards, the merge edges, the entry-fact triggers, the nav routing — and
+`Screen.manager` binds the ledger on first use. Reads in Flutter are
 reactive and surgical via `canon_flutter`: `todosStore.of(context)` (the
 key sequence — structural rebuilds only), `todosStore(id).of(context)` (one
-entity), `unitStore.of(context)`; request status is DERIVED via a store's
-`Awaits` twin (`loadingOf(context)`, `inFlight`) — no `loading` fields in
-state, ever.
+entity), `unitStore.of(context)`; loading is an in-flight row read with the
+same surface — no `loading` fields in state, ever.
 
 ## Install
 
 ```yaml
 dependencies:
-  canon: ^0.22.0            # runtime — nav grammar + the regent state engine
+  canon: ^0.28.0            # runtime — nav grammar + the regent state engine
 dev_dependencies:
-  canon_generator: ^0.29.0  # codegen — emits screen.canon.dart
+  canon_generator: ^0.34.0  # codegen — emits screen.canon.dart
   build_runner: any
 ```
 
