@@ -1,6 +1,7 @@
 ## 0.28.0
 
 - The engine folds: navigation state is a pure value (`NavState`) and every verb a `NavOp` FACT (a regent `Msg`) folded by `navReduce` — journalable, judgeable, replayable; `NavGraph` interprets (history, host, batching).
+- The ledger can OWN the stack: `NavUnit` (a regent citizen), `graph.routeOps`/`applyState`, and `SeedOp` for inbound restores/system pops; `Navigation.mode` is per-op now (a replace claims exactly the op that consumed it).
 - regent ^0.10.0 (pure-fold memories).
 
 ## 0.27.0

@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 
 import 'package:canon_codec/canon_codec.dart';
-import 'package:regent/regent.dart' show Msg;
+import 'package:regent/regent.dart' show Msg, Unit;
 
 import 'browser_history.dart';
 
@@ -234,6 +234,13 @@ class MarkReplaceOp extends NavOp {
   const MarkReplaceOp();
 }
 
+/// An inbound wholesale state (a restore, a URL apply, a system pop already
+/// applied by the interpreter) — the fold adopts it verbatim.
+class SeedOp extends NavOp {
+  const SeedOp(this.state);
+  final NavState state;
+}
+
 /// The PURE navigation fold — the verb semantics as a function of
 /// (state, op): idempotent-tap no-ops, boot exit, trunk park/seed, the
 /// collapse>edge>canonical ladder, targeted pops, keep maintenance. Throws
@@ -251,6 +258,9 @@ NavState navReduce(NavSpec spec, NavState s, NavOp op,
     case MarkReplaceOp():
       return s.copy(pendingReplace: true);
 
+    case SeedOp(:final state):
+      return state;
+
     case GoOp(:final screen, :final id, :final edgeRequired):
       // Idempotent: going to the current top with the same id is a no-op —
       // no commit, no history entry (re-tapping the active tab does
@@ -263,9 +273,11 @@ NavState navReduce(NavSpec spec, NavState s, NavOp op,
           !spec.edgeStacks(s.stack.last.node, screen)) {
         return s;
       }
+      // Mode is a property of THIS op: .push unless a pending replace (or
+      // the boot exit below) claims otherwise.
       var st = s.pendingReplace
           ? s.copy(mode: .replace, pendingReplace: false)
-          : s;
+          : s.copy(mode: .push);
       if (st.active == BootScreen.root) {
         // First commit out of boot: drop the boot entry, seed the target's
         // trunk fresh, and force replace — the loading screen leaves no
@@ -308,7 +320,7 @@ NavState navReduce(NavSpec spec, NavState s, NavOp op,
     case PopOp(:final until):
       final st = s.pendingReplace
           ? s.copy(mode: .replace, pendingReplace: false)
-          : s;
+          : s.copy(mode: .push);
       final res = resolvePop(st.stack, until);
       if (res == null) {
         throw StateError(
@@ -339,6 +351,27 @@ NavState navReduce(NavSpec spec, NavState s, NavOp op,
       final cut = stack!.sublist(0, idx);
       return s.copy(
           stacks: {...s.stacks, trunk: cut.isEmpty ? [seed(trunk)] : cut});
+  }
+}
+
+/// The navigation stack as a regent CITIZEN — hold it as the LAST row of a
+/// regents enum, route the graph's verbs through the ledger
+/// (`graph.routeOps(dispatch)`), and mirror folds back with
+/// `graph.applyState`. Gates above it judge outbound navigation like any
+/// fact; replay carries the session's navigation. Inert (null) until a
+/// [SeedOp] arrives — the graph seeds on wiring and on every inbound
+/// restore. Reads the one live grammar via [NavGraph.boundSpec]: immutable
+/// config, one graph per app.
+final class NavUnit extends Unit<NavState?, Msg> {
+  const NavUnit() : super(null);
+
+  @override
+  NavState? reduce(NavState? state, Msg msg) {
+    if (msg is! NavOp) return state;
+    if (msg is SeedOp) return msg.state;
+    final spec = NavGraph.boundSpec;
+    if (spec == null || state == null) return state; // unwired: inert
+    return navReduce(spec, state, msg);
   }
 }
 
@@ -463,8 +496,14 @@ final class NavGraph {
     _scopes[_activeTrunk] = scope;
     _visited.add(_activeTrunk);
     _visited.sort((a, b) => a.index.compareTo(b.index));
+    _committed = _stateFromScopes();
+    boundSpec = spec;
     _initWebHistory();
   }
+
+  /// The one live spec — [NavUnit]'s window into the grammar (immutable
+  /// config, set at construction; one graph per app).
+  static NavSpec? boundSpec;
 
   /// canon owns the browser history directly on web (raw `pushState` for output,
   /// its own `popstate` for input) — the engine's coalescing history layer is
@@ -1243,6 +1282,7 @@ final class NavGraph {
         }
       }
     }
+    _reseed();
     _host?.refresh();
     return true;
   }
@@ -1505,6 +1545,7 @@ final class NavGraph {
           : decodeFragmentPath(pathRoots, uri.fragment);
       if (decoded != null) _fragmentPathValues[top] = decoded;
     }
+    _reseed();
     _host?.refresh();
     return true;
   }
@@ -1545,7 +1586,15 @@ final class NavGraph {
           ..slots.add(NavSlot(_seed(trunk, id), animate: false));
       });
 
-  NavState _ensurePending() => _pending ??= NavState(
+  /// The COMMITTED navigation state — the fold's truth; scopes/slots are the
+  /// host-facing cache derived from it at each commit.
+  late NavState _committed;
+
+  /// The committed state, for wiring a ledger's seed.
+  @internal
+  NavState get navState => _committed;
+
+  NavState _stateFromScopes() => NavState(
         stacks: {
           for (final e in _scopes.entries)
             e.key: [for (final s in e.value.slots) s.entry]
@@ -1553,9 +1602,32 @@ final class NavGraph {
         active: _activeTrunk,
       );
 
+  NavState _ensurePending() => _pending ??= _committed;
+
+  /// When set, verbs ROUTE their ops here (a regent ledger) instead of
+  /// folding locally; the folded state returns via [applyState]. Gates in
+  /// the queue may judge, drop, or rewrite navigation like any fact.
+  void Function(NavOp op)? _router;
+
+  @internal
+  void routeOps(void Function(NavOp op) dispatch) => _router = dispatch;
+
+  /// A folded [NavState] arriving from the routed queue — commit it (the
+  /// same batching as local folds: one Navigation per microtask).
+  @internal
+  void applyState(NavState next) {
+    _pending = next;
+    _schedule();
+  }
+
   /// Fold [op] into the pending state — the ONE mutation path. A no-op fold
   /// schedules nothing; a throwing fold aborts the batch (programmer error).
   void _fold(NavOp op) {
+    final route = _router;
+    if (route != null) {
+      route(op);
+      return;
+    }
     final before = _ensurePending();
     final NavState after;
     try {
@@ -1643,6 +1715,8 @@ final class NavGraph {
     }
     _activeTrunk = sim.active;
     _scopeOf(_activeTrunk);
+    _committed =
+        NavState(stacks: sim.stacks, active: sim.active); // batch flags reset
     final toEntry = _activeScope.slots.last.entry;
     if (!identical(fromEntry, toEntry)) {
       _lastCommitMode = sim.mode;
@@ -1689,6 +1763,15 @@ final class NavGraph {
     for (final scope in _scopes.values) {
       scope.slots.removeWhere((s) => identical(s.page, page));
     }
+    _reseed();
+  }
+
+  /// Scopes changed OUTSIDE the fold (restore, url apply, a system pop) —
+  /// resync the committed state, and re-seed a routed ledger so its unit
+  /// carries the same truth.
+  void _reseed() {
+    _committed = _stateFromScopes();
+    _router?.call(SeedOp(_committed));
   }
 
   void _warnCanonical(String message) {
