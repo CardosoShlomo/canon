@@ -499,9 +499,13 @@ Codegen wires all of it from the enum — the memories bound in row order,
 the guards, the merge edges, the entry-fact triggers, the nav routing — and
 `Screen.manager` binds the ledger on first use. Reads in Flutter are
 reactive and surgical via `canon_flutter`: `todosStore.of(context)` (the
-key sequence — structural rebuilds only), `todosStore(id).of(context)` (one
-entity), `unitStore.of(context)`; loading is an in-flight row read with the
-same surface — no `loading` fields in state, ever.
+key sequence — structural rebuilds only), `todosStore.entityOf(context, id)`
+(one entity — id omitted reads the AMBIENT identity), `unitStore.of(context)`;
+loading is an in-flight row read with the same surface — no `loading` fields
+in state, ever. Identity itself is ambient and DEICTIC: scopes plant their
+id (node-tagged, so a typed read can never answer with another identity's),
+and the generated per-node faces navigate from where the widget stands —
+`TodoID.navOf(context).go()`, no chain named, no id passed.
 
 ## Install
 
