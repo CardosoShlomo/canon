@@ -2,7 +2,7 @@
 
 **An application runtime context specification.** You declare your app's navigable runtime contexts as one grammar tree; canon projects that spec into navigation, the URL, and state. Everything else hangs off that essence as a property: *compile-safety* is how the projection is realized, and *identity*, when a context has one, is a property **of the context** — ambient within it, read from the runtime, never threaded through application code.
 
-Compile-safe navigation generated from **one grammar tree** — pure Dart (the Flutter binding is `canon_flutter`). The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash. Four small enums under **one annotation** (`@canon` — the mixin says which tier each enum is) are the entire spec: identity, navigation, what exists, and the state ledger's citizens.
+Compile-safe navigation generated from **one grammar tree** — pure Dart (the Flutter binding is `canon_flutter`). The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash. Four small enums under **one annotation** (`@canon` — the mixin says which tier each enum is) are the entire spec: identity, navigation, what exists, and the state ledger's regents.
 
 Built for the AI-authorship era: a machine can only emit legal navigation, and a human audits the **entire nav space** at a glance in one small spec.
 
@@ -387,7 +387,7 @@ trees can never disagree.
 
 State is a **journal of sealed facts** folded by pure functions —
 `dispatch(fact)` is the app's only verb. The `@regents` enum declares the
-ledger's CITIZENS, and **row order is traversal order**: a message walks
+ledger's REGENTS, and **row order is traversal order**: a message walks
 the rows top to bottom. One order, two opposite roles:
 
 - A **store** row is a pure READER standing at its place: it folds what
@@ -398,9 +398,9 @@ the rows top to bottom. One order, two opposite roles:
   no state, but decides what every row below it sees. `Guard.judge` returns
   the feed itself — `{}` drops, `{msg}` passes, `{other}` rewrites,
   `{a, b, …}` fans out policy facts in set order; a `Veto` is the boolean
-  specialization. Guards read the ledger's own state by CITIZEN IDENTITY —
+  specialization. Guards read the ledger's own state by REGENT IDENTITY —
   `read(const Todos())` — so they are replayable by construction (a
-  replayed ledger reads itself), and build-time citizenship checks that
+  replayed ledger reads itself), and build-time regent checks that
   every read names a row of the enum.
 
 Moving a store changes what IT sees; moving a guard changes what EVERYONE
@@ -477,7 +477,7 @@ navigation folds locally through the same pure engine — a grammar-only
 consumer never sees the ledger at all.)
 
 **Order-independence is a LAW you run.** `replay(rows, order)` folds the
-whole enum synchronously and returns every citizen's state:
+whole enum synchronously and returns every regent's state:
 
 ```dart
 expect(replay(Rows.values, [cache, authority]),

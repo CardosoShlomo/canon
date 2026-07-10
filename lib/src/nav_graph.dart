@@ -354,7 +354,7 @@ NavState navReduce(NavSpec spec, NavState s, NavOp op,
   }
 }
 
-/// The navigation stack as a regent CITIZEN — hold it as the LAST row of a
+/// The navigation stack as a REGENT — hold it as the LAST row of a
 /// regents enum, route the graph's verbs through the ledger
 /// (`graph.routeOps(dispatch)`), and mirror folds back with
 /// `graph.applyState`. Gates above it judge outbound navigation like any
