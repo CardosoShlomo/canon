@@ -493,7 +493,9 @@ source — precedence lives on the sealed family, never on a transport.
 facts, not calls (`TodoAdded`, never `AddTodo`-the-handler); semantic
 outcomes, never generic errors (`UsernameTaken`, not `Error(...)`); one
 sealed family per entity concern, so a new variant is a compile error until
-every store answers it (a SHADOW may reduce the root `Msg` and delegate).
+every store answers it. NO row reduces the root `Msg`: cross-family rows
+(shadows, docks, in-flight units) declare a sealed GROUP their facts
+`implements` — membership in the type, exhaustiveness everywhere.
 
 Codegen wires all of it from the enum — the memories bound in row order,
 the guards, the merge edges, the entry-fact triggers, the nav routing — and
