@@ -1,6 +1,7 @@
 ## 0.29.0
 
 - regent ^0.11.0 (guards are launchers: `.forward`/`.mint` judgments; `Envelope` gone).
+- `NavUnit` reduces the sealed `NavOp` (the shadow law: no row reduces root `Msg`).
 
 ## 0.28.0
 

@@ -362,12 +362,11 @@ NavState navReduce(NavSpec spec, NavState s, NavOp op,
 /// [SeedOp] arrives — the graph seeds on wiring and on every inbound
 /// restore. Reads the one live grammar via [NavGraph.boundSpec]: immutable
 /// config, one graph per app.
-final class NavUnit extends Unit<NavState?, Msg> {
+final class NavUnit extends Unit<NavState?, NavOp> {
   const NavUnit() : super(null);
 
   @override
-  NavState? reduce(NavState? state, Msg msg) {
-    if (msg is! NavOp) return state;
+  NavState? reduce(NavState? state, NavOp msg) {
     if (msg is SeedOp) return msg.state;
     final spec = NavGraph.boundSpec;
     if (spec == null || state == null) return state; // unwired: inert
