@@ -372,8 +372,8 @@ enum _Entities with EntityNode<_Entities> {
   final Type type;
   @override
   final Ids? key;
-
-  static final graph = EntityGraph({todo, coverage});
+  // Flat entities need no graph: `EntityGraph({...})` declares OWNERSHIP
+  // only, and an unlisted row is a root.
 }
 ```
 

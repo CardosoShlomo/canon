@@ -1,13 +1,15 @@
 import 'package:canon_codec/canon_codec.dart';
 
 /// Marks the hand-written enum that is an app's ENTITY SPACE: each row binds an
-/// entity TYPE to its id-NODE, and a `static final graph = EntityGraph({...})`
+/// entity TYPE to its id-NODE. A `static final graph = EntityGraph({...})`
 /// declares OWNERSHIP as a tree — `review({comment})` means a comment belongs
 /// to exactly one review (its state lives inside it; removing the review
-/// removes its comments by construction). The same child kind may appear under
-/// several parents (`image({reactor}), moment({reactor})`): instances still
-/// have exactly one owner, of either kind. Roots are the aggregate boundaries —
-/// stores attach to roots only.
+/// removes its comments by construction). The graph carries ownership ONLY:
+/// an unlisted row is a root, and an app whose entities are all flat omits
+/// the graph entirely. The same child kind may appear under several parents
+/// (`image({reactor}), moment({reactor})`): instances still have exactly one
+/// owner, of either kind. Roots are the aggregate boundaries — stores attach
+/// to roots only.
 class Entities {
   const Entities();
 }
