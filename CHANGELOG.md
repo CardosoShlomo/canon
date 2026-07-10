@@ -1,3 +1,7 @@
+## 0.29.0
+
+- regent ^0.11.0 (guards are launchers: `.forward`/`.mint` judgments; `Envelope` gone).
+
 ## 0.28.0
 
 - The engine folds: navigation state is a pure value (`NavState`) and every verb a `NavOp` FACT (a regent `Msg`) folded by `navReduce` — journalable, judgeable, replayable; `NavGraph` interprets (history, host, batching).
