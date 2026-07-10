@@ -2,6 +2,7 @@
 
 - The engine folds: navigation state is a pure value (`NavState`) and every verb a `NavOp` FACT (a regent `Msg`) folded by `navReduce` — journalable, judgeable, replayable; `NavGraph` interprets (history, host, batching).
 - The ledger can OWN the stack: `NavUnit` (a regent citizen), `graph.routeOps`/`applyState`, and `SeedOp` for inbound restores/system pops; `Navigation.mode` is per-op now (a replace claims exactly the op that consumed it).
+- `IdNav<K>` — the deictic navigation claim (this identity, from where the claiming widget stands); the generator hangs typed forward verbs on it, one set per id node.
 - regent ^0.10.0 (pure-fold memories).
 
 ## 0.27.0

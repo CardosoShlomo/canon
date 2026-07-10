@@ -126,3 +126,25 @@ class EntityGraph {
   /// (source row, projection instance).
   List<(Enum, Object)> mergesOf(Enum row) => _merges[row] ?? const [];
 }
+
+/// A deictic navigation claim: "this identity, from where the claiming
+/// widget stands." Minted by the binding layer (canon_flutter's
+/// `IdScope.of<K>(context)`); the generator hangs the typed forward verbs on
+/// it as extensions, one set per id NODE — ids resolve ambiently (the
+/// scope's own id plus ids locked on the chain), so item code never passes
+/// the id it is standing on. Each verb anchors at [screen] on the live chain
+/// and takes the edge with `edgeRequired` enforcement: navigating somewhere
+/// the placement can't reach is a programmer error the fold throws on,
+/// never a silent kick-start fold.
+final class IdNav<K> {
+  /// Constructed by the binding layer only — item code obtains one via
+  /// `IdScope.of<K>(context)`.
+  const IdNav(this.id, this.screen);
+
+  /// The scope's id — [K] is the claiming call site's assertion.
+  final K id;
+
+  /// The screen the claiming context is under: the anchor every verb
+  /// resolves its placement from.
+  final Enum screen;
+}
