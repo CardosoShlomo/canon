@@ -2,7 +2,7 @@
 
 **An application runtime context specification.** You declare your app's navigable runtime contexts as one grammar tree; canon projects that spec into navigation, the URL, and state. Everything else hangs off that essence as a property: *compile-safety* is how the projection is realized, and *identity*, when a context has one, is a property **of the context** — ambient within it, read from the runtime, never threaded through application code.
 
-Compile-safe navigation generated from **one grammar tree** — pure Dart (the Flutter binding is `canon_flutter`). The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash. Four small enums are the entire spec: `@IDs` (identity), `@screens` (navigation), `@entities` (what exists), `@regents` (the state ledger's citizens).
+Compile-safe navigation generated from **one grammar tree** — pure Dart (the Flutter binding is `canon_flutter`). The transitions you're *allowed* to make are the only methods that exist — an illegal route is a **compile error**, not a runtime crash. Four small enums under **one annotation** (`@canon` — the mixin says which tier each enum is) are the entire spec: identity, navigation, what exists, and the state ledger's citizens.
 
 Built for the AI-authorship era: a machine can only emit legal navigation, and a human audits the **entire nav space** at a glance in one small spec.
 
@@ -14,7 +14,7 @@ One grammar, both ends: it drives identical navigation on mobile and the web —
 import 'package:canon/canon.dart';
 part 'screen.canon.dart';
 
-@screens
+@canon
 enum _Screens with ScreenNode<_Screens> {
   home(HomeScreen()),
   search(SearchScreen()),
@@ -56,7 +56,7 @@ enum _Screens with ScreenNode<_Screens> {
 enum _View with QueryKeyBase { text, sort, at, dirty }
 ```
 
-A row is `name(WidgetConst())` or `name(WidgetConst(), idCodec)`. One library-private `@screens` enum, one `NavGraph`, `part 'screen.canon.dart';` — that's the whole grammar. Codegen turns this tree into a typed `Screen` facade whose methods *are* its edges. Read this section and you've read the app's navigation; everything below maps to a line in it.
+A row is `name(WidgetConst())` or `name(WidgetConst(), idCodec)`. One library-private `@canon` screens enum, one `NavGraph`, `part 'screen.canon.dart';` — that's the whole grammar. Codegen turns this tree into a typed `Screen` facade whose methods *are* its edges. Read this section and you've read the app's navigation; everything below maps to a line in it.
 
 ## The core: typed transitions are legal moves
 
@@ -335,7 +335,7 @@ and the SAME node keys a screen and a store, which is what lets data inject
 by nav location:
 
 ```dart
-@IDs()
+@canon
 enum Ids with IdNode {
   todo(.uuid);
 
@@ -362,7 +362,7 @@ declares OWNERSHIP — a child's state lives inside its root's store, and
 codegen derives surgical tree ops from it:
 
 ```dart
-@entities
+@canon
 enum _Entities with EntityNode<_Entities> {
   todo(Todo, .todo),
   coverage(bool);          // keyless — a unit entity
@@ -409,7 +409,7 @@ the admitted feed, never the record; `ledger.on<M>()` taps the END of the
 queue, so effects never fire on a dropped message.
 
 ```dart
-@regents
+@canon
 enum _Regents with RegentNode<_Regents> {
   todosCovered(TodosCovered()),       // coverage folds first
   cachedTodosGate(CachedTodosGate()), // the veto — protects every row below
