@@ -1,3 +1,7 @@
+## 0.30.0
+
+- regent ^0.12.0 (`Regency` graphs, role mixins, CRUD bricks) — the @regents enum tier retires with generator 0.36.
+
 ## 0.29.0
 
 - regent ^0.11.0 (guards are launchers: `.forward`/`.mint` judgments; `Envelope` gone).
