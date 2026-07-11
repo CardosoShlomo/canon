@@ -383,12 +383,12 @@ root's store); the store's key type must agree with its entity's node; the
 entity a store holds must be a row here. Nothing is declared twice, so the
 trees can never disagree.
 
-## The ledger: `@regents`
+## The ledger: the regency
 
 State is a **journal of sealed facts** folded by pure functions —
-`dispatch(fact)` is the app's only verb. The `@regents` enum declares the
-ledger's REGENTS, and **row order is traversal order**: a message walks
-the rows top to bottom. One order, two opposite roles:
+`dispatch(fact)` is the app's only verb. The REGENCY declares the ledger as
+a const VALUE — a set of REGENTS where **set order is traversal order**: a
+message walks the rows top to bottom. One order, two opposite roles:
 
 - A **store** row is a pure READER standing at its place: it folds what
   passes (`Store.reduce` over a keyed collection, `Unit.reduce` over one
@@ -400,47 +400,45 @@ the rows top to bottom. One order, two opposite roles:
   `{a, b, …}` fans out policy facts in set order; a `Veto` is the boolean
   specialization. Guards read the ledger's own state by REGENT IDENTITY —
   `read(const Todos())` — so they are replayable by construction (a
-  replayed ledger reads itself), and build-time regent checks that
-  every read names a row of the enum.
+  replayed ledger reads itself), and a build-time check demands that
+  every read names a row of the graph.
 
 Moving a store changes what IT sees; moving a guard changes what EVERYONE
-below it sees. The journal always keeps the original fact — guards shape
-the admitted feed, never the record; `ledger.on<M>()` taps the END of the
-queue, so effects never fire on a dropped message.
+below it sees. The record always keeps the original fact — guards shape
+the admitted feed, never the record; `ledger.at(.exit).msgs<M>()` taps the
+END of the queue, so effects never fire on a dropped message
+(`at(.entry)` is the complete record — persistence and mirrors tap there).
 
 ```dart
 @canon
-enum _Regents with RegentNode<_Regents> {
-  todosCovered(TodosCovered()),       // coverage folds first
-  cachedTodosGate(CachedTodosGate()), // the veto — protects every row below
-  localTodos(LocalTodos()),           // the disk-cache shadow
-  todos(Todos()),                     // the main store
-  nav(NavUnit());                     // the stack — the session's LAST reader
-
-  const _Regents(this.regent);
-  @override
-  final Regent regent;
-
-  static final merges = {
-    todos.from(localTodos, const LocalTodoSupports()),
-  };
-}
+const app = Regency({
+  TodosCovered(),       // coverage folds first
+  CachedTodosGate(),    // the veto — protects every row below
+  LocalTodos(),         // the disk-cache shadow
+  Todos(),              // the main store
+  NavUnit(),            // the stack — the session's LAST reader
+}, merges: {LocalTodoSupports()});
 
 final class CachedTodosGate extends Veto<CachedTodosMsg> {
   const CachedTodosGate();
   @override
-  bool block(Envelope env, CachedTodosMsg msg, ReadStore read) =>
+  bool block(CachedTodosMsg msg, ReadStore read) =>
       read(const TodosCovered());
 }
 ```
 
-**Merges** are read-time edges, never copied state: the enum's static
-`merges` set declares that one row READS-FROM another through a projection
-(`row ?? local`). A unit source answers a store's reads at its state's own
-id (the viewer answering reads of herself), a store source lends its whole
-collection, and a unit can read from a unit (a write dock's promise
-answering instantly). Chain `.from(...)` for multiple sources; resolution
-follows declaration order.
+Regencies NEST — a feature's rows are their own const segment, spliced at
+its position — and a plain regent is a one-row graph
+(`Ledger.root(const NavUnit())` is the nav-only ledger).
+
+**Merges** are read-time edges, never copied state: each projection CARRIES
+its endpoints (`const LocalTodoSupports() : super(const Todos(), const
+LocalTodos())`) and the `merges` set lists the bare instances — the edge is
+stated once, in the class that owns its meaning. A unit source answers a
+store's reads at its state's own id (the viewer answering reads of
+herself), a store source lends its whole collection, and a unit can read
+from a unit (a write dock's promise answering instantly). Multiple edges on
+one target resolve in set order.
 
 **The cache rows above are the offline pattern, whole**: a boot-time cache
 fact folds into the SHADOW (absent-only), the merge lets the shadow answer
@@ -476,12 +474,13 @@ Replay it and the app is reproduced, not approximated. (Without the row,
 navigation folds locally through the same pure engine — a grammar-only
 consumer never sees the ledger at all.)
 
-**Order-independence is a LAW you run.** `replay(rows, order)` folds the
-whole enum synchronously and returns every regent's state:
+**Order-independence is a LAW you run.** `replay(app, order)` folds the
+whole graph synchronously and returns every regent's FOLDED state, keyed
+by instance:
 
 ```dart
-expect(replay(Rows.values, [cache, authority]),
-       equals(replay(Rows.values, [authority, cache])));
+expect(replay(app, [cache, authority]),
+       equals(replay(app, [authority, cache])));
 ```
 
 Cross-source races (disk vs wire) must converge; within one source, the
@@ -497,12 +496,15 @@ every store answers it. NO row reduces the root `Msg`: cross-family rows
 (shadows, docks, in-flight units) declare a sealed GROUP their facts
 `implements` — membership in the type, exhaustiveness everywhere.
 
-Codegen wires all of it from the enum — the memories bound in row order,
-the guards, the merge edges, the entry-fact triggers, the nav routing — and
-`Screen.manager` binds the ledger on first use. Reads in Flutter are
-reactive and surgical via `canon_flutter`: `todosStore.of(context)` (the
-key sequence — structural rebuilds only), `todosStore.entityOf(context, id)`
-(one entity — id omitted reads the AMBIENT identity), `unitStore.of(context)`;
+The RUNTIME wires all of it (`Ledger.root(app)` splices rows and merge
+edges); codegen adds only the names — `final ledger = Ledger.root(app);`,
+one typed getter per row (`ledger.todos`, sugar over
+`ledger.at(const Todos())`), the entry-fact triggers, the id tags, the nav
+routing — and `Screen.manager` binds the nav side on first use. Reads in
+Flutter are reactive and surgical via `canon_flutter`:
+`ledger.todos.of(context)` (the key sequence — structural rebuilds only),
+`ledger.todos.entityOf(context, id)`
+(one entity — id omitted reads the AMBIENT identity), `ledger.viewer.of(context)`;
 loading is an in-flight row read with the same surface — no `loading` fields
 in state, ever. Identity itself is ambient and DEICTIC: scopes plant their
 id (node-tagged, so a typed read can never answer with another identity's),
@@ -513,9 +515,9 @@ and the generated per-node faces navigate from where the widget stands —
 
 ```yaml
 dependencies:
-  canon: ^0.28.0            # runtime — nav grammar + the regent state engine
+  canon: ^0.30.0            # runtime — nav grammar + the regent state engine
 dev_dependencies:
-  canon_generator: ^0.34.0  # codegen — emits screen.canon.dart
+  canon_generator: ^0.36.0  # codegen — emits screen.canon.dart
   build_runner: any
 ```
 
