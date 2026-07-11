@@ -1,3 +1,8 @@
+## 0.30.1
+
+- regent ^0.13.0.
+- Docs: consumer-named const row globals, feature grafts.
+
 ## 0.30.0
 
 - regent ^0.12.0 (`Regency` graphs, role mixins, CRUD bricks) — the @regents enum tier retires with generator 0.36.

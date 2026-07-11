@@ -399,9 +399,9 @@ message walks the rows top to bottom. One order, two opposite roles:
   the feed itself — `{}` drops, `{msg}` passes, `{other}` rewrites,
   `{a, b, …}` fans out policy facts in set order; a `Veto` is the boolean
   specialization. Guards read the ledger's own state by REGENT IDENTITY —
-  `read(const Todos())` — so they are replayable by construction (a
-  replayed ledger reads itself), and a build-time check demands that
-  every read names a row of the graph.
+  `read(todos)`, the consumer's own const row global — so they are
+  replayable by construction (a replayed ledger reads itself), and a
+  build-time check demands that every read names a row of the graph.
 
 Moving a store changes what IT sees; moving a guard changes what EVERYONE
 below it sees. The record always keeps the original fact — guards shape
@@ -410,12 +410,16 @@ END of the queue, so effects never fire on a dropped message
 (`at(.entry)` is the complete record — persistence and mirrors tap there).
 
 ```dart
+const todosCovered = TodosCovered();  // consumer-named rows: the audit list
+const localTodos = LocalTodos();
+const todos = Todos();
+
 @canon
 const app = Regency({
-  TodosCovered(),       // coverage folds first
+  todosCovered,         // coverage folds first
   CachedTodosGate(),    // the veto — protects every row below
-  LocalTodos(),         // the disk-cache shadow
-  Todos(),              // the main store
+  localTodos,           // the disk-cache shadow
+  todos,                // the main store
   NavUnit(),            // the stack — the session's LAST reader
 }, merges: {LocalTodoSupports()});
 
@@ -423,13 +427,17 @@ final class CachedTodosGate extends Veto<CachedTodosMsg> {
   const CachedTodosGate();
   @override
   bool block(CachedTodosMsg msg, ReadStore read) =>
-      read(const TodosCovered());
+      read(todosCovered);
 }
 ```
 
 Regencies NEST — a feature's rows are their own const segment, spliced at
 its position — and a plain regent is a one-row graph
-(`Ledger.root(const NavUnit())` is the nav-only ledger).
+(`Ledger.root(const NavUnit())` is the nav-only ledger). A self-contained
+feature travels as a named graft (`final class CartFeature extends Regency`
+with a literal `super({...}, merges: {...})` — readable to the generator,
+so its rows keep their generated reads); reads stay FLAT either way —
+`read(todos)` never knows the grouping exists.
 
 **Merges** are read-time edges, never copied state: each projection CARRIES
 its endpoints (`const LocalTodoSupports() : super(const Todos(), const
@@ -497,14 +505,14 @@ every store answers it. NO row reduces the root `Msg`: cross-family rows
 `implements` — membership in the type, exhaustiveness everywhere.
 
 The RUNTIME wires all of it (`Ledger.root(app)` splices rows and merge
-edges); codegen adds only the names — `final ledger = Ledger.root(app);`,
-one typed getter per row (`ledger.todos`, sugar over
-`ledger.at(const Todos())`), the entry-fact triggers, the id tags, the nav
-routing — and `Screen.manager` binds the nav side on first use. Reads in
-Flutter are reactive and surgical via `canon_flutter`:
-`ledger.todos.of(context)` (the key sequence — structural rebuilds only),
-`ledger.todos.entityOf(context, id)`
-(one entity — id omitted reads the AMBIENT identity), `ledger.viewer.of(context)`;
+edges); codegen never invents a name — YOU name the rows as const globals
+(`const todos = Todos();`) and each row class gains a read extension, plus
+`final ledger = Ledger.root(app);`, the entry-fact triggers, the id tags,
+the nav routing — and `Screen.manager` binds the nav side on first use.
+Reads in Flutter are reactive and surgical via `canon_flutter`:
+`todos.of(context)` (the key sequence — structural rebuilds only),
+`todos.entityOf(context, id)`
+(one entity — id omitted reads the AMBIENT identity), `viewer.of(context)`;
 loading is an in-flight row read with the same surface — no `loading` fields
 in state, ever. Identity itself is ambient and DEICTIC: scopes plant their
 id (node-tagged, so a typed read can never answer with another identity's),
