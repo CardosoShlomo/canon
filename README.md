@@ -33,11 +33,11 @@ enum _Screens with ScreenNode<_Screens> {
 
   // A profile: this user's posts, and links to other users (followers).
   static _Screens _user() => user({
-    post({ comment, user.cycled }),
-    user.stacked,                    // tap a follower → another profile, fresh frame
+    post({ comment, user.again }),
+    user.again,                      // tap a follower → another profile, fresh frame
   });
 
-  static final graph = NavGraph({
+  static final graph = ScreenGraph({
     home.keep({ _user() }),
     search.keep({ _user(), comment })
       .query({ _View.text(.string), _View.sort(.enumValues(SortBy.values)) }),  // URL ?text=&sort= — historyless mirror
@@ -56,7 +56,7 @@ enum _Screens with ScreenNode<_Screens> {
 enum _View with QueryKeyBase { text, sort, at, dirty }
 ```
 
-A row is `name(WidgetConst())` or `name(WidgetConst(), idCodec)`. One library-private `@canon` screens enum, one `NavGraph`, `part 'screen.canon.dart';` — that's the whole grammar. Codegen turns this tree into a typed `Screen` facade whose methods *are* its edges. Read this section and you've read the app's navigation; everything below maps to a line in it.
+A row is `name(WidgetConst())` or `name(WidgetConst(), idCodec)`. One library-private `@canon` screens enum, one `ScreenGraph`, `part 'screen.canon.dart';` — that's the whole grammar. Codegen turns this tree into a typed `Screen` facade whose methods *are* its edges. Read this section and you've read the app's navigation; everything below maps to a line in it.
 
 ## The core: typed transitions are legal moves
 
@@ -130,12 +130,16 @@ Screen.on(.parentOf);                       // compile error — target mandator
 Screen.on(.parentOf.home);                  // compile error — home is a trunk, it has no parent
 ```
 
-## Recursion: stacked vs cycled
+## Recursion: again
 
 A profile links to other profiles, and a post links back to its author. Two distinct recursions, both explicit in the tree:
 
-- `user.stacked` — drill-in: push a **fresh** instance, keep intermediate frames (follower → follower → follower).
-- `user.cycled` — exactly `stacked`, plus one rule: it won't stack a second identical copy of a cycle. If a move would repeat a run of frames (same screens **and** ids) back-to-back, canon drops the repeat and returns you to the existing run; any differing id breaks the match, so it just stacks.
+- `user.again` — drill-in: the screen may follow itself again, each visit a
+  **fresh** frame with its intermediate frames kept (follower → follower →
+  follower). The one universal fold stays: navigating to the exact current
+  top is a no-op — and a declared `.again` edge opts out even of that.
+  Anything cleverer (fold-to-ancestor, cycle collapse) is yours to wire
+  with checks on the live stack.
 
 Cyclic screens expose `depth` (live occurrence count); `.depth(n)` pins one:
 
@@ -283,7 +287,7 @@ Screen.restore(snap);                                  // best-effort; truncates
 
 `Screen.manager` is the one host — a `RouterDelegate` you wire into `MaterialApp.router(routerDelegate:)`. It owns the stack and system back on mobile and the browser back/forward + URL channel on web. (The single name is deliberate: if the wiring ever changes, the name stays — always pass it where a `RouterDelegate` goes.)
 
-`NavGraph` takes a required `root:` **boot widget** (a splash, shown until the first real screen commits), optional `pageOf` (defaults to `MaterialPage`), and optional `observers`. Mount another enum's screen family with `graft(Other.tree())`.
+`ScreenGraph` (the flutter binding's construction of the graph) takes a `root:` **boot widget** (a splash, shown until the first real screen commits), optional `chrome` (per-page dressing, wrapped INSIDE the ScreenScope so it reads `context.screen`), optional `pageOf` (defaults to `MaterialPage`), and optional `observers` — every render value typed in the tier that names the types. The pure `NavGraph` construction carries the grammar alone (servers, links-only trees, headless tests). Mount another enum's screen family with `graft(Other.tree())`.
 
 **Cold start & deep links.** `root:` is a boot widget shown until the first screen commits — the launch URL and every runtime deep link flow through the **one resolver** (see *One model* below); the first commit out of boot **auto-replaces** the splash, leaving no history. The boot widget itself reads `Screen.rootUrl` (the launch link, parsed) only to **tailor the loading UI** — e.g. a profile skeleton when the app opened on a user link — while the resolver does the navigating.
 
@@ -355,11 +359,14 @@ whenever — the two are runtime-identical.
 
 ## The entity space: `@entities`
 
-What exists, and who owns whom. Each row binds an entity TYPE to its id
-node; a row **without** a node is a UNIT — cardinality one, the session is
-its identity (the wire test: its facts arrive keyless). The static graph
-declares OWNERSHIP — a child's state lives inside its root's store, and
-codegen derives surgical tree ops from it:
+What exists, and who owns whom. The enum is OPTIONAL — it earns its place
+binding entity types to id nodes or declaring ownership; an app with
+neither omits it, and the entity space derives from the store rows. Each
+row binds an entity TYPE to its id node; a row **without** a node is a
+UNIT — cardinality one, the session is its identity (the wire test: its
+facts arrive keyless). The static graph declares OWNERSHIP — a child's
+state lives inside its root's store, and codegen derives surgical tree
+ops from it:
 
 ```dart
 @canon

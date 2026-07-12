@@ -11,9 +11,9 @@ enum S with ScreenNodeBase<S, Object> {
   Object get widget => name;
 
   static S _userProfile() => profile({
-        profile.cycled,
-        friends({profile.cycled}),
-        review({profile.cycled}),
+        profile.again,
+        friends({profile.again}),
+        review({profile.again}),
       });
 
   static NavSpec spec() => NavSpec({
@@ -94,7 +94,7 @@ void main() {
     });
 
     test('again with no ancestor throws at build', () {
-      expect(() => NavSpec({S.home({S.friends.cycled})}),
+      expect(() => NavSpec({S.home({S.friends.again})}),
           throwsStateError);
     });
 
@@ -123,7 +123,7 @@ void main() {
     });
 
     test('a failed build never poisons the next construction', () {
-      expect(() => NavSpec({S.home({S.friends.cycled})}),
+      expect(() => NavSpec({S.home({S.friends.again})}),
           throwsStateError);
       final s = S.spec();
       expect(s.canonical[S.home]!.children.map((n) => n.screen), [S.profile]);
@@ -237,16 +237,25 @@ void main() {
       expect(r.pushes.single.screen, S.profile);
     });
 
-    test('rung 1: re-tapping the top page is a no-op (period 1)', () {
+    test('rung 1: re-tapping the top page is a no-op (the universal tap)', () {
       final s = S.spec();
-      final stack = [s.entry(S.home), s.entry(S.profile, 'a')];
-      final r = resolveGo(s, stack, S.profile, 'a');
+      final stack = [s.entry(S.settings), s.entry(S.language)];
+      final r = resolveGo(s, stack, S.language, null);
       expect(r.popCount, 0);
       expect(r.pushes, isEmpty);
     });
 
-    test('rung 1: completing a repeated block collapses to its previous occurrence', () {
-      // up<a>/review<a>/up<a> + review<a> -> period 2: pop back to review<a>
+    test('rung 1: a recurs top opts out even of the tap — fresh frame', () {
+      final s = S.spec();
+      final stack = [s.entry(S.home), s.entry(S.profile, 'a')];
+      final r = resolveGo(s, stack, S.profile, 'a');
+      expect(r.popCount, 0);
+      expect(r.pushes.single.screen, S.profile);
+    });
+
+    test('rung 1: repeated blocks never fold — cycles grow the stack', () {
+      // Cycle collapsing was removed with `.cycled`; a consumer who wants a
+      // fold inspects the live stack and pops explicitly.
       final s = S.spec();
       final stack = [
         s.entry(S.home),
@@ -255,26 +264,8 @@ void main() {
         s.entry(S.profile, 'a'),
       ];
       final r = resolveGo(s, stack, S.review, ('x', 'a'));
-      expect(r.popCount, 1);
-      expect(r.pushes, isEmpty);
-    });
-
-    test('rung 1: period-4 cycle collapses per the original spec', () {
-      // up<a>/f<a>/up<b>/f<b>/up<a>/f<a>/up<b> + f<b> -> pop 3 to the previous f<b>
-      final s = S.spec();
-      final stack = [
-        s.entry(S.home),
-        s.entry(S.profile, 'a'),
-        s.entry(S.friends, 'a'),
-        s.entry(S.profile, 'b'),
-        s.entry(S.friends, 'b'),
-        s.entry(S.profile, 'a'),
-        s.entry(S.friends, 'a'),
-        s.entry(S.profile, 'b'),
-      ];
-      final r = resolveGo(s, stack, S.friends, 'b');
-      expect(r.popCount, 3);
-      expect(r.pushes, isEmpty);
+      expect(r.popCount, 0);
+      expect(r.pushes.single.screen, S.review);
     });
 
     test('rung 2: again-edge pushes a DIFFERENT id of the same screen', () {
@@ -333,32 +324,35 @@ void main() {
     });
   });
 
-  group('stacked back-edge', () {
-    test('cycled folds a completed cycle; stacked pushes a fresh instance', () {
-      final cycled = NavSpec({S.profile({S.review({S.profile.cycled})})});
-      final stacked = NavSpec({S.profile({S.review({S.profile.stacked})})});
-      List<StackEntry> stk(NavSpec s) => [
-            s.entry(S.profile, 'a'),
-            s.entry(S.review, ('x', 'a')),
-            s.entry(S.profile, 'a'),
-            s.entry(S.review, ('x', 'a')),
-          ];
-      final c = resolveGo(cycled, stk(cycled), S.profile, 'a');
-      expect(c.popCount, 1); // folds back to the previous occurrence
-      expect(c.pushes, isEmpty);
-
-      final s = resolveGo(stacked, stk(stacked), S.profile, 'a');
-      expect(s.popCount, 0); // keeps the stack
-      expect(s.pushes.single.screen, S.profile);
+  group('recurs back-edge', () {
+    test('recurs pushes a fresh instance on every revisit', () {
+      final spec = NavSpec({S.profile({S.review({S.profile.again})})});
+      final stack = [
+        spec.entry(S.profile, 'a'),
+        spec.entry(S.review, ('x', 'a')),
+        spec.entry(S.profile, 'a'),
+        spec.entry(S.review, ('x', 'a')),
+      ];
+      final r = resolveGo(spec, stack, S.profile, 'a');
+      expect(r.popCount, 0); // keeps the stack — no cycle folding
+      expect(r.pushes.single.screen, S.profile);
     });
 
-    test('stacked pushes a fresh instance even for an exact duplicate of the top', () {
-      final stacked = NavSpec({S.profile({S.profile.stacked})});
-      final r = resolveGo(stacked, [stacked.entry(S.profile, 'a')], S.profile, 'a');
+    test('recurs pushes a fresh instance even for an exact duplicate of the top', () {
+      final spec = NavSpec({S.profile({S.profile.again})});
+      final r = resolveGo(spec, [spec.entry(S.profile, 'a')], S.profile, 'a');
       expect(r.popCount, 0);
       expect(r.pushes.length, 1);
       expect(r.pushes.single.screen, S.profile);
       expect(r.pushes.single.id, 'a');
+    });
+
+    test('a plain revisit of the exact top is the universal no-op tap', () {
+      final spec = NavSpec({S.home({S.profile})});
+      final stack = [spec.entry(S.home), spec.entry(S.profile, 'a')];
+      final r = resolveGo(spec, stack, S.profile, 'a');
+      expect(r.popCount, 0);
+      expect(r.pushes, isEmpty);
     });
   });
 
@@ -429,11 +423,11 @@ void main() {
     });
 
     test('inherit + cycled carries the id lock on the back-edge', () {
-      // The allinloop pair shape: profile.inherit(friends)({friends.inherit(profile).cycled})
+      // The allinloop pair shape: profile.inherit(friends)({friends.inherit(profile).again})
       final s = NavSpec({
         S.home({
           S.friends({
-            S.profile.inherit(S.friends)({S.friends.inherit(S.profile).cycled}),
+            S.profile.inherit(S.friends)({S.friends.inherit(S.profile).again}),
           }),
         }),
       });
@@ -446,14 +440,14 @@ void main() {
     });
 
     test('a sibling back-edge never steals an outer pending inherit', () {
-      // profile.inherit(friends)({ profile.stacked, ... }) — the bare
-      // profile.stacked must not consume the OUTER inherit.
+      // profile.inherit(friends)({ profile.again, ... }) — the bare
+      // profile.again must not consume the OUTER inherit.
       final s = NavSpec({
         S.home({
           S.friends({
             S.profile.inherit(S.friends)({
-              S.profile.stacked,
-              S.friends.inherit(S.profile).cycled,
+              S.profile.again,
+              S.friends.inherit(S.profile).again,
             }),
           }),
         }),
@@ -462,7 +456,7 @@ void main() {
       expect(profile.inheritsFrom, S.friends); // outer inherit intact
       final plainEdge =
           profile.children.firstWhere((n) => n.screen == S.profile);
-      expect(plainEdge.inheritsFrom, isNull); // bare .stacked carries none
+      expect(plainEdge.inheritsFrom, isNull); // bare .again carries none
     });
 
     test('bare inherit as a set element is claimed by its parent', () {
@@ -484,7 +478,7 @@ void main() {
         () async {
       final g = NavGraph({
         S.home({
-          S.profile({S.profile.stacked}),
+          S.profile({S.profile.again}),
         }),
       });
       g.go(S.home);

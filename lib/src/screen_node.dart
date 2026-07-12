@@ -32,10 +32,7 @@ abstract interface class WidgetScreen<W> {
 @internal
 final class GrammarNode {
   GrammarNode(this.screen,
-      {this.again = false,
-      this.keep = false,
-      this.forget = false,
-      this.collapse = true});
+      {this.again = false, this.keep = false, this.forget = false});
 
   /// Mutable so the spec can rewrite a ref to its owner (see [NavSpec] —
   /// `_canonicalize`); distinct ref/owner values collapse to one screen.
@@ -50,9 +47,6 @@ final class GrammarNode {
   /// freed (rebuilt fresh) when the tab parks (inherited downward until a `keep`).
   final bool forget;
 
-  /// `cycled` back-edge folds a completed duplicate cycle; `stacked` (false)
-  /// pushes a fresh instance instead. Only meaningful on back-edges.
-  final bool collapse;
   final List<GrammarNode> children = [];
 
   /// Link branches declared at this placement: a `.link({...})` ([LinkBranch]) or
@@ -83,23 +77,21 @@ final class GrammarNode {
   GrammarNode? parent;
 
   /// The node whose children answer "what may follow here" — self, or the
-  /// nearest same-screen ancestor for `cycled`/`stacked` back-edges.
+  /// nearest same-screen ancestor for `again` back-edges.
   GrammarNode get resolved {
     if (!again) return this;
     for (var n = parent; n != null; n = n.parent) {
       if (n.screen == screen && !n.again) return n;
     }
-    throw StateError(
-        '"${screen.name}.${collapse ? 'cycled' : 'stacked'}" has no same-screen ancestor');
+    throw StateError('"${screen.name}.again" has no same-screen ancestor');
   }
 
   @override
-  String toString() =>
-      again ? '${screen.name}.${collapse ? 'cycled' : 'stacked'}' : screen.name;
+  String toString() => again ? '${screen.name}.again' : screen.name;
 }
 
 /// Authoring marker: what a grammar set literal may hold — a screen (via
-/// `ScreenNodeBase`), a `cycled`/`stacked` back-edge, or a `graft` of another
+/// `ScreenNodeBase`), a `again` back-edge, or a `graft` of another
 /// family. `<S>` keeps a native literal typed to one family; `graft` is the one
 /// explicit cross-family bridge.
 // Not sealed: link DSL nodes (`SlotBuilder`/`SegBuilder`, another library) also
@@ -107,16 +99,14 @@ final class GrammarNode {
 // a screen's children — covariance makes `TreeNode<Never>` a child of any screen.
 abstract interface class TreeNode<S> {}
 
-/// A `cycled`/`stacked` back-edge as a first-class set element. Carries the
-/// screen, fold mode, and — when written `x.inherit(y).cycled` — the LOCKED
-/// id inheritance: the folded/stacked placement's id is provably the
-/// ancestor's, with no slot to inject another. Has no methods, so
-/// `.cycled.inherit(...)` can't be written.
+/// A `again` back-edge as a first-class set element. Carries the screen
+/// and — when written `x.inherit(y).again` — the LOCKED id inheritance:
+/// the recurring placement's id is provably the ancestor's, with no slot to
+/// inject another. Has no methods, so `.again.inherit(...)` can't be
+/// written.
 final class _BackEdge<S> extends TreeNode<S> {
-  _BackEdge(this.screen,
-      {required this.collapse, this.inheritsFrom, this.inheritsAlso = const []});
+  _BackEdge(this.screen, {this.inheritsFrom, this.inheritsAlso = const []});
   final Enum screen;
-  final bool collapse;
   final Enum? inheritsFrom;
   final List<Enum> inheritsAlso;
 }
@@ -126,7 +116,7 @@ final class _BackEdge<S> extends TreeNode<S> {
 /// expression, one node, no orphan to mis-claim. Usable as:
 /// - a bare set element (`editPost.inherit(post)`) — the parent claims it;
 /// - chained call (`user.inherit(chat)({children})`) — the call absorbs it;
-/// - chained back-edge (`user.inherit(chat).cycled`) — id-locked fold/stack;
+/// - chained back-edge (`user.inherit(chat).again`) — id-locked againion;
 /// - chained view-state (`editPost.inherit(post).query({...})`).
 final class Inherited<S> implements TreeNode<S> {
   Inherited._(this._screen, this._node);
@@ -139,18 +129,10 @@ final class Inherited<S> implements TreeNode<S> {
     return _screen;
   }
 
-  /// Id-locked fold back-edge: revisiting folds to the same-screen ancestor,
-  /// and the id is provably the inherit source's.
-  _BackEdge<S> get cycled => _BackEdge<S>(_node.screen,
-      collapse: true,
-      inheritsFrom: _node.inheritsFrom,
-      inheritsAlso: _node.inheritsAlso);
-
-  /// Id-locked fresh-instance back-edge.
-  _BackEdge<S> get stacked => _BackEdge<S>(_node.screen,
-      collapse: false,
-      inheritsFrom: _node.inheritsFrom,
-      inheritsAlso: _node.inheritsAlso);
+  /// Id-locked recurring back-edge: each visit pushes a fresh instance and
+  /// the id is provably the inherit source's.
+  _BackEdge<S> get again => _BackEdge<S>(_node.screen,
+      inheritsFrom: _node.inheritsFrom, inheritsAlso: _node.inheritsAlso);
 
   /// View-state QUERY keys on this inherited placement.
   Inherited<S> query(Set<QueryTerm> terms) {
@@ -209,10 +191,9 @@ void _placeNode<S>(Enum screen, Set<TreeNode<S>> children,
     // is a leaf.
     final GrammarNode childNode;
     if (child is _BackEdge<S>) {
-      childNode =
-          GrammarNode(child.screen, again: true, collapse: child.collapse)
-            ..inheritsFrom = child.inheritsFrom
-            ..inheritsAlso = child.inheritsAlso;
+      childNode = GrammarNode(child.screen, again: true)
+        ..inheritsFrom = child.inheritsFrom
+        ..inheritsAlso = child.inheritsAlso;
     } else if (child is Inherited<S>) {
       childNode = child._node;
     } else if (child is _Graft<S>) {
@@ -352,14 +333,12 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
     return _self;
   }
 
-  /// Back-edge that folds a completed duplicate cycle: revisiting the same
-  /// (screen, id) block already on the stack pops back to it instead of growing.
-  _BackEdge<S> get cycled => _BackEdge<S>(this, collapse: true);
-
-  /// Back-edge that stacks a fresh instance on every revisit, preserving the
-  /// intermediate stack (the only guard is the universal no-op when the target
-  /// equals the current top).
-  _BackEdge<S> get stacked => _BackEdge<S>(this, collapse: false);
+  /// RECURRING back-edge: this screen may follow itself (or a descendant)
+  /// again, each visit its own fresh frame — the grammar's self-recursion.
+  /// The only fold is the universal no-op when the target equals the
+  /// current top; anything cleverer (fold-to-ancestor, cycle collapse) is
+  /// the consumer's to wire with checks on the live stack.
+  _BackEdge<S> get again => _BackEdge<S>(this);
 
   /// Declares this placement's id as its ancestors' (structurally): the generated
   /// push verb takes no id and reads the live ancestor id instead. Read
@@ -452,8 +431,7 @@ final class NavSpec {
         }
         if (trunk is _BackEdge) {
           throw StateError(
-              'a back-edge (${trunk.screen}.${trunk.collapse ? 'cycled' : 'stacked'}) '
-              'cannot be a trunk');
+              'a back-edge (${trunk.screen}.again) cannot be a trunk');
         }
         if (trunk is Inherited) {
           throw StateError('a trunk cannot inherit — it has no ancestor');
@@ -492,7 +470,7 @@ final class NavSpec {
 
   /// Collapses refs to their owner. A screen name may be declared once with a
   /// widget (the OWNER) and any number of times with a null widget (REFS, e.g.
-  /// a sub-enum's bare row reused for in-family `inherit`/`cycled`). Every node
+  /// a sub-enum's bare row reused for in-family `inherit`/`again`). Every node
   /// of that name is rewritten to the owner value, so the engine and host only
   /// ever see one screen identity per name — exactly one owner, no dangling ref.
   void _canonicalize() {
@@ -643,20 +621,11 @@ final class NavSpec {
     return null;
   }
 
-  /// Whether the edge from [top] to [target] folds completed cycles (`cycled`)
-  /// or stacks fresh instances (`stacked`).
-  bool edgeCollapses(GrammarNode top, Enum target) {
-    for (final child in top.resolved.children) {
-      if (child.screen == target) return child.collapse;
-    }
-    return true;
-  }
-
-  /// Whether [top]→[target] is a STACKED back-edge (`.stacked`): a declared
+  /// Whether [top]→[target] is a RECURRING back-edge (`.again`): a declared
   /// fresh-instance push, legitimate even onto the same (screen, id).
   bool edgeStacks(GrammarNode top, Enum target) {
     for (final child in top.resolved.children) {
-      if (child.screen == target) return child.again && !child.collapse;
+      if (child.screen == target) return child.again;
     }
     return false;
   }
@@ -737,8 +706,10 @@ final class NavResolution {
 bool _matches(StackEntry entry, Enum screen, Object? id) =>
     entry.screen == screen && entry.id == id;
 
-/// The forward verb's ladder: collapse > edge > canonical. Total — canonical
-/// always resolves.
+/// The forward verb's ladder: tap > edge > canonical. Total — canonical
+/// always resolves. The TAP is the one universal fold: navigating to the
+/// exact current top is a no-op; a declared `.again` edge opts out even of
+/// that (a fresh same-(screen, id) frame is its meaning).
 @internal
 NavResolution resolveGo(
   NavSpec spec,
@@ -747,22 +718,10 @@ NavResolution resolveGo(
   Object? id, {
   void Function(String)? onCanonicalFallback,
 }) {
-  final n = stack.length;
-  final fold = stack.isEmpty || spec.edgeCollapses(stack.last.node, target);
-  for (var p = 1; 2 * p <= n + 1; p++) {
-    if (!fold) break;
-    if (!_matches(stack[n - p], target, id)) continue;
-    var periodic = true;
-    for (var i = 0; i < p - 1; i++) {
-      final b = stack[n - p + 1 + i];
-      if (!_matches(stack[n - 2 * p + 1 + i], b.screen, b.id)) {
-        periodic = false;
-        break;
-      }
-    }
-    if (periodic) {
-      return NavResolution(popCount: p - 1);
-    }
+  if (stack.isNotEmpty &&
+      _matches(stack.last, target, id) &&
+      !spec.edgeStacks(stack.last.node, target)) {
+    return const NavResolution();
   }
   if (stack.isNotEmpty) {
     final node = spec.edge(stack.last.node, target);

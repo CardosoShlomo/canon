@@ -116,9 +116,6 @@ final class Navigation {
       'Navigation(${from.last.$1.name} → ${to.last.$1.name}, ${direction.name})';
 }
 
-/// Default when the consumer gives no `observers`.
-List<Object> _noObservers() => const [];
-
 /// One view-state condition term in a selector (`.category('books')`, `.not.byFav`).
 /// The generated per-screen `…Cond` types implement this; `Screen.on`/`context.on`
 /// gate on `test(liveValue)`, and [key] is the aspect a reactive read subscribes to.
@@ -243,7 +240,7 @@ class SeedOp extends NavOp {
 
 /// The PURE navigation fold — the verb semantics as a function of
 /// (state, op): idempotent-tap no-ops, boot exit, trunk park/seed, the
-/// collapse>edge>canonical ladder, targeted pops, keep maintenance. Throws
+/// tap>edge>canonical ladder, targeted pops, keep maintenance. Throws
 /// are programmer errors (stale handles, unprovable pops), not states.
 /// [warn] hosts the canonical-fallback diagnostic.
 NavState navReduce(NavSpec spec, NavState s, NavOp op,
@@ -382,7 +379,7 @@ abstract interface class RootScreenBase {
   List<(Enum, Object?)> get chain;
 }
 
-/// The synthetic boot placement. When a graph is built with a [bootWidget], the
+/// The synthetic boot placement. When a graph is built with no seedChain, the
 /// stack is seeded as `[(BootScreen.root, null)]` — so the always-non-empty
 /// invariant holds — and `current`/`Screen.at` report it until the first commit,
 /// which the engine auto-replaces (the boot entry leaves no history). Never part
@@ -457,24 +454,16 @@ List<Enum?>? _compositeSources(GrammarNode node) {
   return out;
 }
 
-final class NavGraph {
+base class NavGraph {
   NavGraph(
     Set<TreeNode> trunkScreens, {
-    this.pageOf,
-    this.chrome,
-    Object? root,
     RootScreenBase? seedChain,
-    this.observers = _noObservers,
-  })  : assert(!(root != null && seedChain != null),
-            'pass at most one of `root:` (the boot widget) or `seedChain:` — '
-            'neither for a spec-only graph (links-only, servers, tests)'),
-        spec = NavSpec(trunkScreens) {
+  }) : spec = NavSpec(trunkScreens) {
     _linkRoot = _linkRootOf(trunkScreens, spec);
     _collectViewSchema();
-    _bootWidget = root;
-    // Neither root nor seedChain = a SPEC-ONLY graph: the grammar, links, and
-    // URL surface with no boot stack — what a links-only tree (all LinkNode
-    // rows) or a headless consumer authors.
+    // No seedChain = the grammar, links, and URL surface with a bare boot
+    // entry — what a links-only tree (all LinkNode rows), a headless
+    // consumer, or the flutter tier's boot-frame mode authors.
     final chain = seedChain != null
         ? seedChain.chain
         : const <(Enum, Object?)>[(BootScreen.root, null)];
@@ -853,23 +842,6 @@ final class NavGraph {
     return base + (q.isEmpty ? '' : '?$q') + (f.isEmpty ? '' : '#$f');
   }
 
-  /// Builds a page for a screen's widget — the FLUTTER layer's signature
-  /// (`Page Function(Widget, PageCtx, Object key)`), stored untyped so the pure
-  /// engine never names Flutter types. Null → the flutter host's default page.
-  /// Receives content already ScreenScope-wrapped (chrome included) — pageOf
-  /// is page/route mechanics only, never widget composition.
-  final Function? pageOf;
-
-  /// Dresses a screen's widget with the app's per-page chrome (scaffold,
-  /// nav bar, safe areas) — the FLUTTER layer's signature
-  /// (`Widget Function(Widget, PageCtx)`), stored untyped like [pageOf].
-  /// The host wraps the ScreenScope AROUND the chrome, so chrome reads
-  /// `context.screen` like any screen content. Null → no chrome.
-  final Function? chrome;
-
-  /// Navigator observers factory — opaque here; the flutter host reads it.
-  final List<Object> Function() observers;
-
   /// Screen-name → screen, for restore. Names are unique (refs collapse to one
   /// owner), so this is total over the live tree.
   late final Map<String, Enum> _byName = {
@@ -895,9 +867,6 @@ final class NavGraph {
   late Enum _activeTrunk;
   NavState? _pending;
 
-  /// The consumer's boot loading UI (a `W`), shown for the [BootScreen.root]
-  /// entry; null when the graph was seeded from a chain instead.
-  Object? _bootWidget;
   final GrammarNode _bootNode = GrammarNode(BootScreen.root);
 
   /// True while the active top is the synthetic boot placement (pre-first-commit).
@@ -1299,7 +1268,7 @@ final class NavGraph {
     // browser shows so the loading screen reflects where you're headed.
     if (top.screen == BootScreen.root) return bootUrl ?? '/';
     // The URL mirrors the TOP screen's forward grammar path (+ ids), NOT the raw
-    // stack: back-edges (.stacked/.cycled) add stack DEPTH, never URL segments.
+    // stack: back-edges (.recurs) add stack DEPTH, never URL segments.
     // Walk the top's resolved parent chain (trunk→top); each id comes from the
     // deepest stack entry instantiating that spine node (so back-edge depth and
     // sibling-stacked instances below the spine drop out — `[a,b,a]` → `/a`).
@@ -1735,12 +1704,11 @@ final class NavGraph {
     _host?.refresh();
   }
 
-  /// The raw widget for [entry]'s screen (boot widget for the boot entry) —
-  /// the host wraps it (ScreenScope) and feeds `pageOf`.
+  /// The raw widget for [entry]'s screen — the host wraps it (ScreenScope)
+  /// and builds the page. The boot entry's face is the HOST'S own (the graph
+  /// carries no render values); it branches before asking.
   @internal
-  Object widgetOf(StackEntry entry) => entry.screen == BootScreen.root
-      ? _bootWidget!
-      : (entry.screen as WidgetScreen).widget!;
+  Object widgetOf(StackEntry entry) => (entry.screen as WidgetScreen).widget!;
 
   /// The host's view of the live scopes.
   @internal
@@ -1779,11 +1747,6 @@ final class NavGraph {
       return true;
     }());
   }
-
-  /// The consumer's boot widget (opaque here) — the host renders it on a bare
-  /// floor and for the boot entry.
-  @internal
-  Object? get bootWidget => _bootWidget;
 
   @internal
   bool isMulti(Enum screen) => spec.isMulti(screen);

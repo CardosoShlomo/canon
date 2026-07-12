@@ -1,3 +1,10 @@
+## 0.31.0
+
+- BREAKING: `.cycled` removed — cycle folding is the consumer's to wire with checks on the live stack; the universal no-op tap remains.
+- BREAKING: `.stacked` renamed `.again` — the recurring back-edge, each visit a fresh frame.
+- BREAKING: `NavGraph` construction is spec-only (grammar + optional `seedChain`); `root`/`chrome`/`pageOf`/`observers` live on canon_flutter's `ScreenGraph`. `NavGraph` is `base`.
+- regent ^0.14.0.
+
 ## 0.30.1
 
 - regent ^0.13.0.
