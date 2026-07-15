@@ -1,3 +1,7 @@
+## 0.31.1
+
+- Lints on `package:lints` recommended; README explains the pure model.
+
 ## 0.31.0
 
 - BREAKING: `.cycled` removed — cycle folding is the consumer's to wire with checks on the live stack; the universal no-op tap remains.

@@ -315,7 +315,7 @@ mixin ScreenNodeBase<S extends ScreenNodeBase<S, W>, W> on Enum
   S get _self => this as S;
 
   /// Declares a placement of this screen with [children] as its continuations.
-  /// Returns the screen itself so tree literals type as Set<TreeNode<S>>.
+  /// Returns the screen itself so tree literals type as `Set<TreeNode<S>>`.
   S call([Set<TreeNode<S>> children = const {}]) => _place(children);
 
   /// Liveness-on boundary: this placement and its subtree stay live when the
