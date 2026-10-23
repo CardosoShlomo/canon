@@ -1518,8 +1518,10 @@ base class NavGraph {
     return true;
   }
 
-  List<StackEntry> get stack =>
-      List.unmodifiable([for (final s in _activeScope.slots) s.entry]);
+  /// The active stack as the verbs so far leave it: a chain like
+  /// `goUser(id).goUserFeed()` reads the id its first hop queued.
+  List<StackEntry> get stack => List.unmodifiable(
+      _pending?.stack ?? [for (final s in _activeScope.slots) s.entry]);
 
   /// How many entries on the active stack are [screen] (and [id] if given) —
   /// the cycle depth backing `Screen.on(.x.depth(n))`.

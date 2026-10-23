@@ -501,4 +501,15 @@ void main() {
       expect(g.stack.map((e) => e.screen), [S.home, S.settings]);
     });
   });
+
+  test('a chained go reads the stack it just queued', () {
+    final g = NavGraph({
+      S.home({S.profile({S.friends})}),
+    });
+    g.go(S.home);
+    g.go(S.profile, 'u1');
+    // Nothing committed yet: the child's inherited id must come from the
+    // queued fold, as a generated `goProfile(id).goFriends()` reads it.
+    expect(g.stack.lastWhere((e) => e.screen == S.profile).id, 'u1');
+  });
 }
