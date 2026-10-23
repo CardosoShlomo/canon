@@ -1,3 +1,7 @@
+## 0.31.2
+
+- A chained go reads the id its first hop queued (`goUser(id).goUserFeed()`).
+
 ## 0.31.1
 
 - Lints on `package:lints` recommended; README explains the pure model.
