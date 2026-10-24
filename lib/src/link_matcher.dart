@@ -1,6 +1,22 @@
 import 'package:canon_codec/canon_codec.dart';
 import 'link_spec.dart';
 
+/// [url] as a [Uri] whose path, query and fragment all decode, or null.
+/// `Uri.parse` accepts a broken percent escape (`/user/%E0%A4`) that
+/// `pathSegments` then throws on, so every inbound link parses through here.
+Uri? tryParseUri(String url) {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return null;
+  try {
+    uri.pathSegments;
+    uri.queryParametersAll;
+    Uri.decodeComponent(uri.fragment);
+  } on FormatException {
+    return null;
+  }
+  return uri;
+}
+
 /// One consumed path step — kept so a match can print itself back.
 sealed class _Hit {
   const _Hit();
@@ -53,7 +69,7 @@ final class LinkMatcher {
   /// Parse a URL string into a match, or null for any unrecognized shape
   /// (unknown domain, no committed route, failed/missing params).
   LinkMatch? parse(String url) {
-    final uri = Uri.tryParse(url);
+    final uri = tryParseUri(url);
     if (uri == null) return null;
     for (final domain in spec.domains) {
       final segments = _domainSegments(domain, uri);
