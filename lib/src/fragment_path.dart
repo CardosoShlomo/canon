@@ -57,7 +57,12 @@ List<Object?>? decodeFragmentPath(Set<FragmentNode> roots, String raw) {
   final values = <Object?>[];
   var level = roots;
   for (final seg in segments) {
-    final token = Uri.decodeComponent(seg);
+    final String token;
+    try {
+      token = Uri.decodeComponent(seg);
+    } on FormatException {
+      return null; // a broken percent escape — no fragment, not a crash
+    }
     FragmentNode? matched;
     Object? value;
     for (final n in level) {

@@ -212,6 +212,17 @@ class GoOp extends NavOp {
   final bool edgeRequired;
 }
 
+/// Go to [screen] from [from]'s position: back to the nearest [from], then
+/// along its edge. Nothing happens when [from] has left the stack (a late
+/// tap on a screen already gone), and an entry already standing on [from]
+/// as `(screen, id)` is kept rather than pushed again (a double tap).
+class GoFromOp extends NavOp {
+  const GoFromOp(this.from, this.screen, this.id);
+  final Enum from;
+  final Enum screen;
+  final Object? id;
+}
+
 class PopOp extends NavOp {
   const PopOp([this.until]);
   final Enum? until;
@@ -313,6 +324,23 @@ NavState navReduce(NavSpec spec, NavState s, NavOp op,
       }
       return st.withStack(applied(st.stack,
           resolveGo(spec, st.stack, screen, id, onCanonicalFallback: warn)));
+
+    case GoFromOp(:final from, :final screen, :final id):
+      final at = s.stack.lastIndexWhere((e) => e.screen == from);
+      if (s.active == BootScreen.root || at < 0) return s;
+      final above = at + 1 < s.stack.length ? s.stack[at + 1] : null;
+      if (above != null && above.screen == screen && above.id == id) {
+        if (at + 2 == s.stack.length) return s;
+        final st = s.pendingReplace
+            ? s.copy(mode: .replace, pendingReplace: false)
+            : s.copy(mode: .push);
+        return st.withStack(s.stack.sublist(0, at + 2));
+      }
+      return navReduce(
+          spec,
+          s.withStack(s.stack.sublist(0, at + 1)),
+          GoOp(screen, id, edgeRequired: true),
+          warn: warn);
 
     case PopOp(:final until):
       final st = s.pendingReplace
@@ -785,7 +813,7 @@ base class NavGraph {
   LinkMatch? parseLink(String url) {
     final trunk = _linkRoot;
     if (trunk == null) return null;
-    final uri = Uri.tryParse(url);
+    final uri = tryParseUri(url);
     if (uri == null) return null;
     // The domain is derived from the url itself (host is captured, not matched),
     // so it self-matches. A path-only boot/deep-link url ("/item/me") has no
@@ -1045,8 +1073,8 @@ base class NavGraph {
       final codec = e.value;
       if (codec == null) {
         if (v == true) pairs.add(e.key); // flag: present = true
-      } else {
-        pairs.add('${e.key}=${Uri.encodeQueryComponent(codec.encode(v))}');
+      } else if (_tokenOf(codec, v) case final token?) {
+        pairs.add('${e.key}=${Uri.encodeQueryComponent(token)}');
       }
     }
     return pairs.join('&');
@@ -1065,7 +1093,13 @@ base class NavGraph {
       if (codec == null) {
         map[key] = true; // flag present
       } else if (eq >= 0) {
-        final decoded = codec.decode(Uri.decodeQueryComponent(pair.substring(eq + 1)));
+        final String token;
+        try {
+          token = Uri.decodeQueryComponent(pair.substring(eq + 1));
+        } on FormatException {
+          continue;
+        }
+        final decoded = codec.decode(token);
         if (decoded != null) map[key] = decoded;
       }
     }
@@ -1137,7 +1171,7 @@ base class NavGraph {
               if (e.value.isNotEmpty)
                 e.key.name: {
                   for (final kv in e.value.entries)
-                    kv.key: _viewCodec(e.key, kv.key)?.encode(kv.value) ?? kv.value,
+                    kv.key: ?_viewToken(e.key, kv.key, kv.value),
                 },
           },
         if (_fragmentPathValues.isNotEmpty)
@@ -1150,17 +1184,41 @@ base class NavGraph {
           // The synthetic boot scope has no persistable state and no real screen.
           for (final e in _scopes.entries)
             if (e.key != BootScreen.root)
-              e.key.name: [
-                for (final s in (activeDepth != null && e.key == _activeTrunk
-                    ? e.value.slots.take(activeDepth)
-                    : e.value.slots))
-                  [
-                    s.entry.screen.name,
-                    (s.entry.screen as ScreenNodeBase).id?.encode(s.entry.id),
-                  ],
-              ],
+              e.key.name: _rowsOf(activeDepth != null && e.key == _activeTrunk
+                  ? e.value.slots.take(activeDepth)
+                  : e.value.slots),
         },
       };
+
+  // A scope's snapshot rows, ending before the first id its codec cannot
+  // carry: restore would truncate there anyway, and no row above an entry
+  // outlives it.
+  List<List<Object?>> _rowsOf(Iterable<NavSlot> slots) {
+    final rows = <List<Object?>>[];
+    for (final s in slots) {
+      final codec = (s.entry.screen as ScreenNodeBase).id;
+      final token = codec == null ? null : _tokenOf(codec, s.entry.id);
+      if (codec != null && token == null) break;
+      rows.add([s.entry.screen.name, token]);
+    }
+    return rows;
+  }
+
+  // [id]'s token, or null when [codec] refuses it.
+  static String? _tokenOf(Codec<Object?> codec, Object? id) {
+    try {
+      return codec.encode(id);
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  // A view value's snapshot form: its token, the raw flag, or null when its
+  // codec refuses it (the value is then left out).
+  Object? _viewToken(Enum screen, String key, Object? value) {
+    final codec = _viewCodec(screen, key);
+    return codec == null ? value : _tokenOf(codec, value);
+  }
 
   /// Rebuilds every scope from a [toState] snapshot, best-effort: replays legal
   /// edges and decodes each id via the screen's codec. ANY failure mid-stack —
@@ -1221,6 +1279,7 @@ base class NavGraph {
         (active != null && built.containsKey(active)) ? active : built.keys.first;
     // Rebuild view-state (decode each token via its codec; flags are raw bools).
     _viewValues.clear();
+    _fragmentPathValues.clear();
     final fragPaths = state['fragPaths'];
     if (fragPaths is Map) {
       for (final e in fragPaths.entries) {
@@ -1286,6 +1345,8 @@ base class NavGraph {
         if (slots[k].entry.node.resolved == node) id = slots[k].entry.id;
       }
       final sources = _compositeSources(node);
+      // An id its codec refuses ends the mirror there: no URL past a segment
+      // the parser could not read back.
       if (sources != null) {
         // Composite-inherited: each inherited component already rode its
         // ancestor's segment; only the non-inherited components appear here.
@@ -1294,13 +1355,23 @@ base class NavGraph {
         final values = _idComponentValues(codec, id);
         final own = [
           for (var c = 0; c < sources.length; c++)
-            if (sources[c] == null) comps[c].encode(values[c])
+            if (sources[c] == null) _tokenOf(comps[c], values[c])
         ];
+        if (own.contains(null)) {
+          parts.removeLast();
+          break;
+        }
         if (own.isNotEmpty) parts.add(own.join(_idSep(codec)));
       } else if (node.inheritsFrom == null) {
         // Atomic id segment carries its token; a single-source inherited
         // segment is bare — its id already rode the source segment.
-        if (id != null) parts.add(codec.encode(id));
+        if (id == null) continue;
+        final token = _tokenOf(codec, id);
+        if (token == null) {
+          parts.removeLast();
+          break;
+        }
+        parts.add(token);
       }
     }
     final base = '/${parts.join('/')}';
@@ -1327,7 +1398,9 @@ base class NavGraph {
   /// `parseUrl` wraps the result as a go-able `Place`. Truncation rules match
   /// [applyUrl]: unknown screen / illegal edge / rejected-or-missing id ends it.
   List<(Enum, Object?)>? parsePath(String url) {
-    final segs = Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
+    final uri = tryParseUri(url);
+    if (uri == null) return null;
+    final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
     if (segs.isEmpty) return null;
     final trunk = _byName[_urlUnkebab(segs.first)];
     if (trunk == null || !spec.canonical.containsKey(trunk)) return null;
@@ -1403,8 +1476,9 @@ base class NavGraph {
   }
 
   bool applyUrl(String url) {
-    final segs =
-        Uri.parse(url).pathSegments.where((s) => s.isNotEmpty).toList();
+    final uri = tryParseUri(url);
+    if (uri == null) return false;
+    final segs = uri.pathSegments.where((s) => s.isNotEmpty).toList();
     if (segs.isEmpty) return false;
     final trunk = _byName[_urlUnkebab(segs.first)];
     if (trunk == null || !spec.canonical.containsKey(trunk)) return false;
@@ -1499,14 +1573,12 @@ base class NavGraph {
     final top = scope.slots.last.entry.screen;
     final schema = _viewSchema[top];
     if (schema != null) {
-      final uri = Uri.parse(url);
       _viewValues.remove(top);
       _decodeView(top, schema.query, uri.query);
       _decodeView(top, schema.fragment, uri.fragment);
     }
     final pathRoots = _fragmentPathSchema[top];
     if (pathRoots != null) {
-      final uri = Uri.parse(url);
       _fragmentPathValues.remove(top);
       final decoded = uri.fragment.isEmpty
           ? null
@@ -1614,6 +1686,26 @@ base class NavGraph {
         id != null || null is T || T == Never, '"${screen.name}" requires an id');
     _fold(GoOp(screen, id, edgeRequired: edgeRequired));
     return _nav;
+  }
+
+  /// Goes to [screen] from [from]'s position — see [GoFromOp]. The verbs of a
+  /// generated placement handle run through here, so a handle outliving its
+  /// screen does nothing rather than throw.
+  @internal
+  Nav goFrom(Enum from, Enum screen, Object? id) {
+    _fold(GoFromOp(from, screen, id));
+    return _nav;
+  }
+
+  /// The placement path (trunk first) of [entry], whether or not it still
+  /// stands on the stack — how a screen's own context resolves its placement.
+  @internal
+  List<Enum> chainOf(StackEntry entry) {
+    final chain = <Enum>[];
+    for (GrammarNode? n = entry.node.resolved; n != null; n = n.parent) {
+      chain.insert(0, n.screen);
+    }
+    return chain;
   }
 
   /// A guaranteed pop — the caller has proven the target is reachable, so failing
