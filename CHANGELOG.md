@@ -1,6 +1,9 @@
-## 0.31.2
+## 0.32.0
 
 - A chained go reads the id its first hop queued (`goUser(id).goUserFeed()`).
+- `tryParseUri`: a link with a broken percent escape parses to nothing instead of throwing.
+- `goFrom`/`GoFromOp`: go from a screen's own position; nothing once it is gone, no re-push on a repeat.
+- Snapshots and the URL mirror stop at an id their codec refuses; restore clears stale fragment paths.
 
 ## 0.31.1
 
