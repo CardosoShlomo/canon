@@ -1,3 +1,7 @@
+## 0.32.1
+
+- A system back (back button, back gesture, swipe back) is announced on `navigations` and `observe` like a folded pop.
+
 ## 0.32.0
 
 - A chained go reads the id its first hop queued (`goUser(id).goUserFeed()`).

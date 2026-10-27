@@ -1779,15 +1779,9 @@ base class NavGraph {
     _scopeOf(_activeTrunk);
     _committed =
         NavState(stacks: sim.stacks, active: sim.active); // batch flags reset
-    final toEntry = _activeScope.slots.last.entry;
-    if (!identical(fromEntry, toEntry)) {
+    if (!identical(fromEntry, _activeScope.slots.last.entry)) {
       _lastCommitMode = sim.mode;
-      final nav = _buildNavigation(
-          fromStack, [for (final s in _activeScope.slots) s.entry], sim.mode);
-      for (final fn in [..._navListeners]) {
-        fn(fromEntry.screen, toEntry.screen);
-      }
-      if (_navStream.hasListener) _navStream.add(nav);
+      _announce(fromStack, sim.mode);
     }
     // First commit out of boot: drop the now-parked boot scope so its loading
     // widget unmounts and never re-renders.
@@ -1821,10 +1815,28 @@ base class NavGraph {
   // The active Navigator removed a page on its own (gesture / system back).
   @internal
   void onPageRemoved(Object page) {
+    final fromStack = [for (final s in _activeScope.slots) s.entry];
     for (final scope in _scopes.values) {
       scope.slots.removeWhere((s) => identical(s.page, page));
     }
     _reseed();
+    // A system pop (back gesture, swipe back) lands a new top as surely as a
+    // folded pop, so its observers hear it the same way.
+    if (fromStack.isNotEmpty &&
+        _activeScope.slots.isNotEmpty &&
+        !identical(fromStack.last, _activeScope.slots.last.entry)) {
+      _announce(fromStack, .push);
+    }
+  }
+
+  /// Tells every observer the active top moved from [fromStack]'s to today's.
+  void _announce(List<StackEntry> fromStack, CommitMode mode) {
+    final toStack = [for (final s in _activeScope.slots) s.entry];
+    final nav = _buildNavigation(fromStack, toStack, mode);
+    for (final fn in [..._navListeners]) {
+      fn(fromStack.last.screen, toStack.last.screen);
+    }
+    if (_navStream.hasListener) _navStream.add(nav);
   }
 
   /// Scopes changed OUTSIDE the fold (restore, url apply, a system pop) —
