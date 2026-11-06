@@ -1111,7 +1111,10 @@ base class NavGraph {
   final StreamController<Navigation> _navStream =
       StreamController<Navigation>.broadcast();
 
-  Enum get current => _activeScope.slots.last.entry.screen;
+  /// The top screen, pending goes included, as [stack] and [currentChain]
+  /// read it: a go not yet committed is what the next read sees.
+  Enum get current =>
+      (_pending?.stack.last ?? _activeScope.slots.last.entry).screen;
 
   /// A broadcast stream of committed [Navigation] snapshots — the ergonomic
   /// observer surface. Filter with `.where`, dispose via the subscription's

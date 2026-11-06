@@ -1,3 +1,7 @@
+## 0.32.2
+
+- `current` reads a go not yet committed, as `stack` and `currentChain` do; a link opened over a screen placed in several spots no longer throws.
+
 ## 0.32.1
 
 - A system back (back button, back gesture, swipe back) is announced on `navigations` and `observe` like a folded pop.
