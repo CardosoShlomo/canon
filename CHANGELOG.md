@@ -1,3 +1,7 @@
+## 0.32.3
+
+- `reaches(screen)`: whether the top, where it stands, has an edge to a screen.
+
 ## 0.32.2
 
 - `current` reads a go not yet committed, as `stack` and `currentChain` do; a link opened over a screen placed in several spots no longer throws.

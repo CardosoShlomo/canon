@@ -36,4 +36,24 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(g.current, P.product);
   });
+
+  // Help sits under home and under product; only the one under home reaches
+  // product, so the same screen answers by where it stands.
+  test('a screen placed twice reaches only what its own placement holds', () async {
+    final g = NavGraph({
+      P.home({
+        P.product({P.help}),
+        P.help({P.product}),
+      }),
+    });
+    g.go(P.home);
+    g.go(P.help);
+    await Future<void>.delayed(Duration.zero);
+    expect(g.reaches(P.product), isTrue);
+    g.go(P.product, 'a');
+    g.go(P.help);
+    await Future<void>.delayed(Duration.zero);
+    expect(g.current, P.help);
+    expect(g.reaches(P.product), isFalse);
+  });
 }

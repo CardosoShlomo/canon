@@ -1116,6 +1116,14 @@ base class NavGraph {
   Enum get current =>
       (_pending?.stack.last ?? _activeScope.slots.last.entry).screen;
 
+  /// Whether [screen] is a go from the top where it stands, pending goes
+  /// included: a screen placed in several spots reaches only what its own
+  /// placement holds.
+  bool reaches(Enum screen) => spec.edge(
+        (_pending?.stack.last ?? _activeScope.slots.last.entry).node,
+        screen,
+      ) != null;
+
   /// A broadcast stream of committed [Navigation] snapshots — the ergonomic
   /// observer surface. Filter with `.where`, dispose via the subscription's
   /// `cancel`. Delivery is async (a post-commit microtask), so it never blocks
